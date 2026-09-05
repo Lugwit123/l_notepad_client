@@ -1,0 +1,963 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindowRoot</class>
+ <widget class="QWidget" name="MainWindowRoot">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>797</width>
+    <height>686</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>L Notepad</string>
+  </property>
+  <layout class="QVBoxLayout" name="rootHostLayout">
+   <property name="spacing">
+    <number>0</number>
+   </property>
+   <property name="leftMargin">
+    <number>0</number>
+   </property>
+   <property name="topMargin">
+    <number>0</number>
+   </property>
+   <property name="rightMargin">
+    <number>0</number>
+   </property>
+   <property name="bottomMargin">
+    <number>0</number>
+   </property>
+   <item>
+    <layout class="QVBoxLayout" name="verticalLayout_root">
+     <property name="spacing">
+      <number>0</number>
+     </property>
+     <property name="leftMargin">
+      <number>0</number>
+     </property>
+     <property name="topMargin">
+      <number>0</number>
+     </property>
+     <property name="rightMargin">
+      <number>0</number>
+     </property>
+     <property name="bottomMargin">
+      <number>0</number>
+     </property>
+     <item>
+      <widget class="QTabWidget" name="tabs">
+       <property name="currentIndex">
+        <number>0</number>
+       </property>
+       <property name="documentMode">
+        <bool>true</bool>
+       </property>
+       <widget class="QWidget" name="tab_main">
+        <attribute name="title">
+         <string>主界面</string>
+        </attribute>
+        <layout class="QVBoxLayout" name="verticalLayout_mainTab">
+         <property name="spacing">
+          <number>0</number>
+         </property>
+         <property name="leftMargin">
+          <number>0</number>
+         </property>
+         <property name="topMargin">
+          <number>0</number>
+         </property>
+         <property name="rightMargin">
+          <number>0</number>
+         </property>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+         <item>
+          <widget class="QSplitter" name="splitter_main">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <widget class="QWidget" name="left_panel">
+            <property name="minimumSize">
+             <size>
+              <width>170</width>
+              <height>0</height>
+             </size>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>220</width>
+              <height>16777215</height>
+             </size>
+            </property>
+            <layout class="QVBoxLayout" name="verticalLayout_left">
+             <property name="spacing">
+              <number>6</number>
+             </property>
+             <property name="leftMargin">
+              <number>6</number>
+             </property>
+             <property name="topMargin">
+              <number>8</number>
+             </property>
+             <property name="rightMargin">
+              <number>4</number>
+             </property>
+             <property name="bottomMargin">
+              <number>8</number>
+             </property>
+             <item>
+              <widget class="QLineEdit" name="search_edit">
+               <property name="placeholderText">
+                <string>搜索标题…</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QTreeWidget" name="notes_list">
+               <property name="minimumSize">
+                <size>
+                 <width>150</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="indentation">
+                <number>16</number>
+               </property>
+               <property name="uniformRowHeights">
+                <bool>false</bool>
+               </property>
+               <property name="animated">
+                <bool>true</bool>
+               </property>
+               <property name="wordWrap">
+                <bool>true</bool>
+               </property>
+               <property name="headerHidden">
+                <bool>true</bool>
+               </property>
+               <property name="expandsOnDoubleClick">
+                <bool>true</bool>
+               </property>
+               <column>
+                <property name="text">
+                 <string>名称</string>
+                </property>
+               </column>
+              </widget>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayout_leftButtons">
+               <property name="spacing">
+                <number>8</number>
+               </property>
+               <item>
+                <widget class="QPushButton" name="btn_refresh">
+                 <property name="text">
+                  <string>刷新</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="btn_favorite">
+                 <property name="text">
+                  <string>※ 置顶/收藏</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+            </layout>
+           </widget>
+           <widget class="QWidget" name="right_panel">
+            <layout class="QVBoxLayout" name="verticalLayout_right">
+             <property name="spacing">
+              <number>10</number>
+             </property>
+             <property name="leftMargin">
+              <number>12</number>
+             </property>
+             <property name="topMargin">
+              <number>10</number>
+             </property>
+             <property name="rightMargin">
+              <number>12</number>
+             </property>
+             <property name="bottomMargin">
+              <number>10</number>
+             </property>
+             <item>
+              <widget class="QWidget" name="ai_widget" native="true">
+               <layout class="QVBoxLayout" name="verticalLayout">
+                <property name="spacing">
+                 <number>0</number>
+                </property>
+                <property name="leftMargin">
+                 <number>0</number>
+                </property>
+                <property name="topMargin">
+                 <number>0</number>
+                </property>
+                <property name="rightMargin">
+                 <number>0</number>
+                </property>
+                <property name="bottomMargin">
+                 <number>0</number>
+                </property>
+                <item>
+                 <layout class="QHBoxLayout" name="horizontalLayout_titleRow">
+                  <property name="spacing">
+                   <number>8</number>
+                  </property>
+                  <item>
+                   <widget class="QComboBox" name="provider_combo">
+                    <property name="minimumSize">
+                     <size>
+                      <width>120</width>
+                      <height>0</height>
+                     </size>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QLabel" name="label_model">
+                    <property name="text">
+                     <string>模型:</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QComboBox" name="model_combo">
+                    <property name="minimumSize">
+                     <size>
+                      <width>260</width>
+                      <height>0</height>
+                     </size>
+                    </property>
+                    <property name="editable">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="btn_refresh_models">
+                    <property name="text">
+                     <string>刷新模型</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+                <item>
+                 <widget class="QTabWidget" name="ai_tabs">
+                  <property name="visible">
+                   <bool>true</bool>
+                  </property>
+                  <property name="documentMode">
+                   <bool>true</bool>
+                  </property>
+                  <property name="tabsClosable">
+                   <bool>true</bool>
+                  </property>
+                  <widget class="QWidget" name="ai_tab_template">
+                   <property name="visible">
+                    <bool>true</bool>
+                   </property>
+                   <attribute name="title">
+                    <string>Template</string>
+                   </attribute>
+                   <layout class="QVBoxLayout" name="ai_tab_layout_template">
+                    <property name="spacing">
+                     <number>10</number>
+                    </property>
+                    <property name="leftMargin">
+                     <number>10</number>
+                    </property>
+                    <property name="topMargin">
+                     <number>10</number>
+                    </property>
+                    <property name="rightMargin">
+                     <number>10</number>
+                    </property>
+                    <property name="bottomMargin">
+                     <number>10</number>
+                    </property>
+                    <item>
+                     <widget class="QTextEdit" name="CodeEditor">
+                      <property name="lineWrapMode">
+                       <enum>QTextEdit::NoWrap</enum>
+                      </property>
+                      <property name="placeholderText">
+                       <string>在这里输入问题，然后点击&quot;问AI&quot;。
+
+支持多会话与上下文记忆。
+支持模型：硅基流动 / 智谱 Zhipu。</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item>
+                     <widget class="QTextEdit" name="AiAnswerViewer">
+                      <property name="readOnly">
+                       <bool>true</bool>
+                      </property>
+                      <property name="placeholderText">
+                       <string>AI 回答会显示在这里（支持多会话上下文）</string>
+                      </property>
+                     </widget>
+                    </item>
+                   </layout>
+                  </widget>
+                 </widget>
+                </item>
+                <item>
+                 <layout class="QHBoxLayout" name="horizontalLayout_tokenStats">
+                  <property name="spacing">
+                   <number>8</number>
+                  </property>
+                  <item>
+                   <widget class="QLabel" name="label_input_tokens">
+                    <property name="text">
+                     <string>输入: 0 tokens</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QLabel" name="label_output_tokens">
+                    <property name="text">
+                     <string>输出: 0 tokens</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QLabel" name="label_cost">
+                    <property name="text">
+                     <string>费用: 价格未知</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QLabel" name="label_price_source">
+                    <property name="text">
+                     <string>价格: 未加载</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <spacer name="horizontalSpacer_tokenStats">
+                    <property name="orientation">
+                     <enum>Qt::Horizontal</enum>
+                    </property>
+                    <property name="sizeHint" stdset="0">
+                     <size>
+                      <width>40</width>
+                      <height>20</height>
+                     </size>
+                    </property>
+                   </spacer>
+                  </item>
+                  <item>
+                   <widget class="QLabel" name="tab_count">
+                    <property name="text">
+                     <string>TextLabel</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+                <item>
+                 <widget class="QTextEdit" name="ai_answer_edit">
+                  <property name="visible">
+                   <bool>true</bool>
+                  </property>
+                  <property name="lineWrapMode">
+                   <enum>QTextEdit::WidgetWidth</enum>
+                  </property>
+                  <property name="readOnly">
+                   <bool>true</bool>
+                  </property>
+                  <property name="placeholderText">
+                   <string>AI 回答会显示在这里</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <layout class="QHBoxLayout" name="horizontalLayout_actionButtons">
+                  <item>
+                   <spacer name="horizontalSpacer_actions">
+                    <property name="orientation">
+                     <enum>Qt::Horizontal</enum>
+                    </property>
+                    <property name="sizeHint" stdset="0">
+                     <size>
+                      <width>40</width>
+                      <height>20</height>
+                     </size>
+                    </property>
+                   </spacer>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="btn_ai_ask">
+                    <property name="text">
+                     <string>问AI</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+               </layout>
+              </widget>
+             </item>
+             <item>
+              <widget class="Line" name="line">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QWidget" name="log_widget" native="true">
+               <layout class="QVBoxLayout" name="verticalLayout_logWidget">
+                <property name="spacing">
+                 <number>10</number>
+                </property>
+                <property name="leftMargin">
+                 <number>0</number>
+                </property>
+                <property name="topMargin">
+                 <number>0</number>
+                </property>
+                <property name="rightMargin">
+                 <number>0</number>
+                </property>
+                <property name="bottomMargin">
+                 <number>0</number>
+                </property>
+                <item>
+                 <layout class="QHBoxLayout" name="horizontalLayout_logTitleRow">
+                  <property name="spacing">
+                   <number>8</number>
+                  </property>
+                  <item>
+                   <widget class="QLineEdit" name="title_edit">
+                    <property name="placeholderText">
+                     <string>标题</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QLabel" name="label_version">
+                    <property name="text">
+                     <string>📜 版本</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QComboBox" name="combo_version">
+                    <property name="minimumSize">
+                     <size>
+                      <width>260</width>
+                      <height>0</height>
+                     </size>
+                    </property>
+                    <property name="toolTip">
+                     <string>查看并切换到该笔记/日志的历史保存版本</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+                <item>
+                 <widget class="QTextEdit" name="content_edit">
+                  <property name="acceptDrops">
+                   <bool>true</bool>
+                  </property>
+                  <property name="lineWrapMode">
+                   <enum>QTextEdit::WidgetWidth</enum>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <layout class="QHBoxLayout" name="horizontalLayout_logActionButtons">
+                  <item>
+                   <widget class="QPushButton" name="btn_new">
+                    <property name="text">
+                     <string>新建</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="btn_save">
+                    <property name="text">
+                     <string>保存</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="btn_delete">
+                    <property name="text">
+                     <string>删除</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <spacer name="horizontalSpacer_logActions">
+                    <property name="orientation">
+                     <enum>Qt::Horizontal</enum>
+                    </property>
+                    <property name="sizeHint" stdset="0">
+                     <size>
+                      <width>40</width>
+                      <height>20</height>
+                     </size>
+                    </property>
+                   </spacer>
+                  </item>
+                 </layout>
+                </item>
+               </layout>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="CodeEditorStatusBar">
+               <property name="styleSheet">
+                <string notr="true">QLabel#CodeEditorStatusBar { background-color: #0b111c; color: #9fb3c8; border-top: 1px solid #1c2637; padding: 2px 10px; font-size: 11px; }</string>
+               </property>
+               <property name="text">
+                <string>未加载文件</string>
+               </property>
+               <property name="textInteractionFlags">
+                <set>Qt::TextSelectableByMouse</set>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+       <widget class="FolderFavoritesWidget" name="tab_folder_favorites">
+        <attribute name="title">
+         <string> 文件夹</string>
+        </attribute>
+        <layout class="QVBoxLayout" name="verticalLayout_folderFavorites">
+         <property name="spacing">
+          <number>1</number>
+         </property>
+         <property name="leftMargin">
+          <number>10</number>
+         </property>
+         <property name="topMargin">
+          <number>2</number>
+         </property>
+         <property name="rightMargin">
+          <number>10</number>
+         </property>
+         <property name="bottomMargin">
+          <number>10</number>
+         </property>
+         <item>
+          <widget class="QLabel" name="folder_favorites_title_label">
+           <property name="styleSheet">
+            <string notr="true">font-size: 10px; font-weight: bold; padding: 1px;</string>
+           </property>
+           <property name="text">
+            <string>📁 文件夹收藏 (folder_favorites.json)</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QListWidget" name="folder_favorites_list">
+           <property name="contextMenuPolicy">
+            <enum>Qt::CustomContextMenu</enum>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QWidget" name="ClipboardGroup" native="true">
+           <property name="styleSheet">
+            <string>#ClipboardGroup { background-color: #2b2b2b; border-radius: 5px; padding: 5px; }</string>
+           </property>
+           <layout class="QVBoxLayout" name="verticalLayout_clipboardGroup">
+            <property name="spacing">
+             <number>1</number>
+            </property>
+            <property name="topMargin">
+             <number>2</number>
+            </property>
+            <item>
+             <layout class="QHBoxLayout" name="horizontalLayout_clipboardTitle">
+              <item>
+               <widget class="QLabel" name="clipboard_title_label">
+                <property name="styleSheet">
+                 <string notr="true">color: #cccccc; font-size: 9px; font-weight: bold; padding: 1px;</string>
+                </property>
+                <property name="text">
+                 <string>📋 剪贴板历史</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="clipboard_count_label">
+                <property name="styleSheet">
+                 <string notr="true">color: #89DDFF; font-size: 8px; padding: 3px 0px;</string>
+                </property>
+                <property name="text">
+                 <string>0 条</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <spacer name="horizontalSpacer_clipboardTitle">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>40</width>
+                  <height>20</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+              <item>
+               <widget class="QToolButton" name="ClipboardActionsButton">
+                <property name="maximumSize">
+                 <size>
+                  <width>16777215</width>
+                  <height>12</height>
+                 </size>
+                </property>
+                <property name="cursor">
+                 <cursorShape>PointingHandCursor</cursorShape>
+                </property>
+                <property name="styleSheet">
+                 <string>QToolButton#ClipboardActionsButton { padding: 0 6px; font-size: 10px; line-height: 10px; border: 1px solid rgba(137, 221, 255, 0.25); border-radius: 5px; background: rgba(255,255,255,0.04); color: #89DDFF; margin: 0 4px; }
+QToolButton#ClipboardActionsButton:hover { background: rgba(137, 221, 255, 0.15); }
+QToolButton#ClipboardActionsButton::menu-indicator { image: none; width: 0; }
+QMenu#ClipboardActionsMenu::item { height: 20px; padding: 0 16px; font-size: 12px; }</string>
+                </property>
+                <property name="text">
+                 <string>▾</string>
+                </property>
+                <property name="popupMode">
+                 <enum>QToolButton::InstantPopup</enum>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+            <item>
+             <widget class="QLineEdit" name="clipboard_search">
+              <property name="styleSheet">
+               <string>background-color: #1e1e1e; border: 1px solid #3c3c3c; color: #d4d4d4; border-radius: 4px; padding: 4px 6px;</string>
+              </property>
+              <property name="placeholderText">
+               <string>🔍 搜索剪贴板历史...</string>
+              </property>
+              <property name="clearButtonEnabled">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QListView" name="clipboard_list">
+              <property name="contextMenuPolicy">
+               <enum>Qt::CustomContextMenu</enum>
+              </property>
+              <property name="styleSheet">
+               <string>QListView { background-color: #1e1e1e; border: 1px solid #3c3c3c; color: #d4d4d4; padding: 0; }
+QListView::item { padding: 0px 4px; margin: 0; min-height: 14px; }
+QListView::item:selected { background-color: #3a3a3a; }
+QScrollBar:vertical { background: #1e1e1e; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: #5a5a5a; min-height: 20px; border-radius: 5px; }
+QScrollBar::handle:vertical:hover { background: #6e6e6e; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }</string>
+              </property>
+              <property name="editTriggers">
+               <set>QAbstractItemView::NoEditTriggers</set>
+              </property>
+              <property name="uniformItemSizes">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+       <widget class="FolderFavoritesWidget" name="tab_command_favorites">
+        <attribute name="title">
+         <string>⚡ 命令</string>
+        </attribute>
+        <layout class="QVBoxLayout" name="verticalLayout_commandFavorites">
+         <property name="spacing">
+          <number>1</number>
+         </property>
+         <property name="leftMargin">
+          <number>10</number>
+         </property>
+         <property name="topMargin">
+          <number>2</number>
+         </property>
+         <property name="rightMargin">
+          <number>10</number>
+         </property>
+         <property name="bottomMargin">
+          <number>10</number>
+         </property>
+         <item>
+          <widget class="QLabel" name="command_favorites_title_label">
+           <property name="styleSheet">
+            <string notr="true">font-size: 10px; font-weight: bold; padding: 1px;</string>
+           </property>
+           <property name="text">
+            <string>⚡ 命令收藏 (command_favorites.json)</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QListWidget" name="command_favorites_list">
+           <property name="contextMenuPolicy">
+            <enum>Qt::CustomContextMenu</enum>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="command_favorites_hint_label">
+           <property name="styleSheet">
+            <string notr="true">color: gray; font-size: 11px;</string>
+           </property>
+           <property name="text">
+            <string>提示: 右键「命令收藏」标签可添加/执行/编辑/删除命令</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+       <widget class="FolderFavoritesWidget" name="tab_url_favorites">
+        <attribute name="title">
+         <string>🌐 网址</string>
+        </attribute>
+        <layout class="QVBoxLayout" name="verticalLayout_urlFavorites">
+         <property name="spacing">
+          <number>0</number>
+         </property>
+         <property name="leftMargin">
+          <number>0</number>
+         </property>
+         <property name="topMargin">
+          <number>0</number>
+         </property>
+         <property name="rightMargin">
+          <number>0</number>
+         </property>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+         <item>
+          <widget class="QLabel" name="url_favorites_title_label">
+           <property name="font">
+            <font>
+             <pointsize>-1</pointsize>
+             <bold>true</bold>
+            </font>
+           </property>
+           <property name="styleSheet">
+            <string notr="true">font-size: 10px; font-weight: bold; padding: 2px;</string>
+           </property>
+           <property name="text">
+            <string>🌐 网址收藏 (url_favorites.json)</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QListWidget" name="url_favorites_list">
+           <property name="contextMenuPolicy">
+            <enum>Qt::CustomContextMenu</enum>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="url_favorites_hint_label">
+           <property name="styleSheet">
+            <string notr="true">color: gray; font-size: 11px;</string>
+           </property>
+           <property name="text">
+            <string>提示: 右键「网址收藏」标签可添加/打开/删除网址</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+       <widget class="AccountFavoritesWidget" name="tab_account_favorites">
+        <attribute name="title">
+         <string> 账号</string>
+        </attribute>
+        <layout class="QVBoxLayout" name="verticalLayout_accountFavorites">
+         <property name="spacing">
+          <number>8</number>
+         </property>
+         <property name="leftMargin">
+          <number>8</number>
+         </property>
+         <property name="topMargin">
+          <number>8</number>
+         </property>
+         <property name="rightMargin">
+          <number>8</number>
+         </property>
+         <property name="bottomMargin">
+          <number>8</number>
+         </property>
+         <item>
+          <widget class="QLabel" name="account_favorites_title_label">
+           <property name="styleSheet">
+            <string notr="true">font-size: 10px; font-weight: bold; padding: 1px;</string>
+           </property>
+           <property name="text">
+            <string>👤 账号收藏 (account_favorites.json)</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <layout class="QHBoxLayout" name="horizontalLayout_accountButtons">
+           <item>
+            <widget class="QPushButton" name="btn_add_account">
+             <property name="text">
+              <string> 添加账号</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="btn_copy_account">
+             <property name="text">
+              <string> 复制信息</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="btn_edit_account">
+             <property name="text">
+              <string> 编辑</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="btn_delete_account">
+             <property name="text">
+              <string> 删除</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="btn_custom_fields">
+             <property name="text">
+              <string>+ 自定义字段</string>
+             </property>
+             <property name="toolTip">
+              <string>为选中的账号添加或编辑自定义字段</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="horizontalSpacer_accountButtons">
+             <property name="orientation">
+              <enum>Qt::Horizontal</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>40</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </item>
+         <item>
+          <widget class="QListWidget" name="account_favorites_list">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+             <horstretch>0</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <property name="contextMenuPolicy">
+            <enum>Qt::CustomContextMenu</enum>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="account_favorites_hint_label">
+           <property name="styleSheet">
+            <string notr="true">color: #7f8c8d; font-size: 12px; padding: 4px;</string>
+           </property>
+           <property name="text">
+            <string>💡 提示：点击「添加账号」保存常用账号信息，双击或点击「复制信息」可快速复制到剪贴板</string>
+           </property>
+           <property name="wordWrap">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+       <widget class="QWidget" name="tab_log">
+        <attribute name="title">
+         <string>日志</string>
+        </attribute>
+        <layout class="QVBoxLayout" name="verticalLayout_logTab">
+         <property name="leftMargin">
+          <number>10</number>
+         </property>
+         <property name="topMargin">
+          <number>10</number>
+         </property>
+         <property name="rightMargin">
+          <number>10</number>
+         </property>
+         <property name="bottomMargin">
+          <number>10</number>
+         </property>
+         <item>
+          <widget class="QTextEdit" name="log_view">
+           <property name="lineWrapMode">
+            <enum>QTextEdit::NoWrap</enum>
+           </property>
+           <property name="readOnly">
+            <bool>true</bool>
+           </property>
+           <property name="placeholderText">
+            <string>这里显示日志输出</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>FolderFavoritesWidget</class>
+   <extends>QWidget</extends>
+   <header>folder_favorites_widget</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>AccountFavoritesWidget</class>
+   <extends>QWidget</extends>
+   <header>accountfavoriteswidget.h</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>

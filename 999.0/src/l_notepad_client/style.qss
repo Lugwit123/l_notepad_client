@@ -1,0 +1,276 @@
+/* L Notepad 样式表 */
+
+QWidget {
+  font-family: "Segoe UI", "Microsoft YaHei UI", Arial;
+  font-size: 12px;
+  color: #E9EEF5;
+}
+
+QMainWindow {
+  background: #090D14;
+}
+
+QWidget#centralwidget {
+  background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0B1020, stop:1 #0D1117);
+}
+
+QWidget#left_panel, QWidget#right_panel, QWidget#tab_log {
+  background: rgba(15, 21, 34, 0.82);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+}
+
+QLineEdit, QTextEdit, QComboBox {
+  background: rgba(18, 24, 38, 0.96);
+  border: 1px solid rgba(137, 221, 255, 0.12);
+  border-radius: 12px;
+  padding: 9px 11px;
+  selection-background-color: rgba(77, 163, 255, 0.35);
+}
+
+QSpinBox, QDoubleSpinBox {
+  background: rgba(18, 24, 38, 0.96);
+  border: 1px solid rgba(137, 221, 255, 0.12);
+  border-radius: 10px;
+  padding: 6px 10px;
+  min-height: 28px;
+  min-width: 72px;
+}
+
+QSpinBox::up-button, QSpinBox::down-button,
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+  width: 20px;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
+  background: rgba(77, 163, 255, 0.2);
+}
+
+QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
+  border: 1px solid rgba(77, 163, 255, 0.78);
+  background: rgba(21, 30, 48, 0.98);
+}
+
+QLineEdit::placeholder, QTextEdit::placeholder, QPlainTextEdit::placeholder {
+  color: rgba(233,238,245,0.42);
+}
+
+QTextEdit#CodeEditor, QPlainTextEdit#CodeEditor, LineNumberTextEdit#CodeEditor,
+QTextEdit#LogViewer, QPlainTextEdit#LogViewer, LineNumberTextEdit#LogViewer,
+QTextEdit#HelpViewer, QPlainTextEdit#HelpViewer, LineNumberTextEdit#HelpViewer,
+QTextEdit#AiAnswerViewer, QPlainTextEdit#AiAnswerViewer, LineNumberTextEdit#AiAnswerViewer {
+  background: #0C1016;
+  color: #D6DEEB;
+  border: 1px solid rgba(137, 221, 255, 0.13);
+  font-family: "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+  line-height: 1.35;
+}
+
+QComboBox {
+  min-height: 18px;
+}
+
+QComboBox::drop-down {
+  width: 28px;
+  border: none;
+  border-left: 1px solid rgba(255,255,255,0.08);
+}
+
+QComboBox QAbstractItemView {
+  background: #101827;
+  border: 1px solid rgba(77, 163, 255, 0.35);
+  border-radius: 10px;
+  padding: 6px;
+  selection-background-color: rgba(77, 163, 255, 0.25);
+  outline: 0;
+}
+
+QPushButton {
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  padding: 8px 14px;
+  min-height: 18px;
+}
+
+QPushButton:hover {
+  background: rgba(77, 163, 255, 0.16);
+  border: 1px solid rgba(77, 163, 255, 0.42);
+}
+
+QPushButton:pressed {
+  background: rgba(77, 163, 255, 0.24);
+}
+
+QPushButton:disabled {
+  color: rgba(233,238,245,0.32);
+  background: rgba(255,255,255,0.035);
+  border: 1px solid rgba(255,255,255,0.055);
+}
+
+QPushButton#PrimaryButton {
+  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(77, 163, 255, 0.34), stop:1 rgba(125, 92, 255, 0.28));
+  border: 1px solid rgba(77, 163, 255, 0.62);
+}
+
+QPushButton#DangerButton {
+  background: rgba(255, 92, 92, 0.16);
+  border: 1px solid rgba(255, 92, 92, 0.50);
+}
+
+QListWidget {
+  background: rgba(9, 14, 24, 0.82);
+  border: 1px solid rgba(137, 221, 255, 0.10);
+  border-radius: 10px;
+  padding: 2px;
+  outline: 0;
+}
+
+QListWidget::item {
+  background: transparent;
+  border-radius: 6px;
+  padding: 3px 6px;
+  margin: 0;
+}
+
+QListWidget::item:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+QListWidget::item:selected {
+  background: rgba(77, 163, 255, 0.24);
+  border: 1px solid rgba(77, 163, 255, 0.38);
+  color: #FFFFFF;
+}
+
+/* 左侧文件树样式（文件名 + 日期换行） */
+QTreeWidget#notes_list {
+  background: rgba(9, 14, 24, 0.82);
+  border: 1px solid rgba(137, 221, 255, 0.10);
+  border-radius: 10px;
+  padding: 2px 2px 2px 3px;
+  outline: 0;
+}
+
+QTreeWidget#notes_list::item {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 1px 4px 1px 0px;
+  margin: 0px 2px 0px 0px;
+  min-height: 30px;
+}
+
+QTreeWidget#notes_list::item:hover {
+  background: rgba(255,255,255,0.055);
+}
+
+QTreeWidget#notes_list::item:selected {
+  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(77, 163, 255, 0.22), stop:1 rgba(125, 92, 255, 0.16));
+  border: 1px solid rgba(77, 163, 255, 0.40);
+  color: #FFFFFF;
+}
+
+QTreeWidget#notes_list::branch {
+  background: transparent;
+}
+
+QSplitter::handle {
+  background: rgba(137, 221, 255, 0.06);
+  margin: 8px 6px;
+  border-radius: 4px;
+}
+
+QStatusBar {
+  background: rgba(255,255,255,0.035);
+  color: rgba(233,238,245,0.80);
+}
+
+QTabWidget::pane {
+  border: none;
+  top: 0;
+}
+
+QTabBar::tab {
+  background: rgba(255,255,255,0.055);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 10px;
+  padding: 4px 8px;
+  margin-right: 6px;
+  margin-bottom: 8px;
+}
+
+QTabBar::tab:selected {
+  background: rgba(77, 163, 255, 0.26);
+  border: 1px solid rgba(77, 163, 255, 0.55);
+  color: #FFFFFF;
+}
+
+QTabBar::close-button {
+  background: rgba(255,255,255,0.15);
+  border-radius: 4px;
+  min-width: 14px;
+  max-width: 14px;
+  min-height: 14px;
+  max-height: 14px;
+  color: #FFFFFF;
+  font-weight: bold;
+  font-size: 10px;
+}
+
+QTabBar::close-button:hover {
+  background: rgba(255, 92, 92, 0.85);
+}
+
+/* AI标签页动态创建的关闭按钮样式（代码中使用QPushButton作为关闭按钮） */
+QTabBar QPushButton {
+  background-color: transparent;
+  color: rgba(200,200,200,0.7);
+  border: none;
+  font-weight: bold;
+  font-size: 14px;
+  padding: 1px;
+  margin: 0px 4px 0px 0px;
+  min-width: 14px;
+  max-width: 14px;
+  min-height: 14px;
+  max-height: 14px;
+}
+
+QTabBar QPushButton:hover {
+  background-color: transparent;
+  color: rgba(255, 70, 70, 1.0);
+  border: none;
+}
+
+QScrollBar:vertical, QScrollBar:horizontal {
+  background: rgba(255,255,255,0.035);
+  border: none;
+  border-radius: 6px;
+  margin: 2px;
+}
+
+QScrollBar:vertical {
+  width: 10px;
+}
+
+QScrollBar:horizontal {
+  height: 10px;
+}
+
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+  background: rgba(137, 221, 255, 0.24);
+  border-radius: 5px;
+}
+
+QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
+  background: rgba(137, 221, 255, 0.38);
+}
+
+QScrollBar::add-line, QScrollBar::sub-line {
+  width: 0;
+  height: 0;
+}
