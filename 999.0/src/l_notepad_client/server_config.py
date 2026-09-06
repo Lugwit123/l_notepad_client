@@ -25,15 +25,32 @@ from l_qframelesswindow.server_config import ServerConfigStore
 from . import paths
 
 # 服务器类型 -> (默认地址, 环境变量名)
-# host 由系统级环境变量 Lugwit_deploy 自动区分（开发机=本机 nginx 127.0.0.1:8080；
-# 公网部署机=生产 nginx 8080 统一入口，location /api/v1/ → lugwit_auth，
-# /note/ 剥前缀转发到笔记后端 8765）。8765 只监听 127.0.0.1，不对外暴露端口。
+# host 默认值：公网部署机（Lugwit_deploy=1）→ 生产 nginx 8080 统一入口；
+# 开发机（缺省）优先本机 nginx 127.0.0.1:8080，本机 nginx 不可达时自动回退到
+# 内置生产服务器 121.196.144.88:8080——避免无配置文件/无本机 nginx 时登录指向
+# 不可达地址而失败（登录服务器地址本就内置于程序，不应因缺配置而登录报错）。
 def _is_prod() -> bool:
     """公网部署机标记：系统级环境变量 Lugwit_deploy=1。0/缺省 = 开发机。"""
     return os.environ.get("Lugwit_deploy", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
-_HOST_PREFIX = "http://121.196.144.88:8080" if _is_prod() else "http://127.0.0.1:8080"
+_PROD_PREFIX = "http://121.196.144.88:8080"
+_DEV_PREFIX = "http://127.0.0.1:8080"
+
+
+def _default_host_prefix() -> str:
+    """内置默认 host：公网机 → 生产；开发机 → 本机 nginx，不可达时回退生产。"""
+    if _is_prod():
+        return _PROD_PREFIX
+    try:
+        import socket
+        with socket.create_connection(("127.0.0.1", 8080), timeout=1.0):
+            return _DEV_PREFIX
+    except Exception:
+        return _PROD_PREFIX
+
+
+_HOST_PREFIX = _default_host_prefix()
 _DEFAULTS = {
     "auth_url": _HOST_PREFIX,                      # 认证服务：nginx 入口（/api/v1/ → lugwit_auth）
     "auth_route": "/api/v1/auth",                  # 认证路由（login / verify / me 端点前缀）
