@@ -872,8 +872,12 @@ class LoginDialog(QtWidgets.QDialog):
     """登录对话框：用户名 + 密码，调 Auth Service 登录。
 
     「记住账号密码」复选框：勾选状态下启动时自动回填账号 + 密码；
-    登录成功时按勾选状态决定是否把账号/明文密码写入
-    <data_dir>/remembered_login.json；取消勾选后下次登录即清除该文件。
+    无论登录成败，都按勾选状态决定是否把账号/明文密码写入
+    <data_dir>/remembered_login.json（登录失败也保存，下次回填）；
+    取消勾选后下次登录即清除该文件。
+
+    「下次自动登录」复选框：勾选（需同时勾选记住账号密码）后，启动时
+    用记住的账号密码静默登录，不再弹出登录对话框。
     """
 
     _REMEMBER_FILE = data_root() / "remembered_login.json"
@@ -914,6 +918,10 @@ class LoginDialog(QtWidgets.QDialog):
         self._remember_cb.toggled.connect(self._on_remember_toggled)
         outer.addWidget(self._remember_cb)
 
+        self._auto_cb = QtWidgets.QCheckBox("下次自动登录")
+        self._auto_cb.toggled.connect(self._on_auto_toggled)
+        outer.addWidget(self._auto_cb)
+
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.addStretch(1)
         cancel_btn = QtWidgets.QPushButton("取消")
@@ -931,6 +939,8 @@ class LoginDialog(QtWidgets.QDialog):
             self._user_edit.setText(remembered.get("username", ""))
             self._pwd_edit.setText(remembered.get("password", ""))
             self._remember_cb.setChecked(True)
+            if remembered.get("auto_login"):
+                self._auto_cb.setChecked(True)
 
     def _on_confirm(self) -> None:
         username = self._user_edit.text().strip()
@@ -938,6 +948,11 @@ class LoginDialog(QtWidgets.QDialog):
         if not username or not password:
             self._show_error("请输入用户名和密码")
             return
+        # 记住账号密码：无论登录成败都按勾选状态生效（登录失败也保存，下次回填）
+        if self._remember_cb.isChecked():
+            self._save_remembered(username, password, auto_login=self._auto_cb.isChecked())
+        else:
+            self._clear_remembered()
         try:
             body = json.dumps({"username": username, "password": password}).encode("utf-8")
             req = urllib.request.Request(
@@ -965,11 +980,6 @@ class LoginDialog(QtWidgets.QDialog):
             return
         self._token = token
         self._username = (data.get("user") or {}).get("username", username)
-        # 按勾选状态决定是否把账号+密码写入 remembered_login.json
-        if self._remember_cb.isChecked():
-            self._save_remembered(username, password)
-        else:
-            self._clear_remembered()
         self.accept()
 
     def _show_error(self, text: str) -> None:
