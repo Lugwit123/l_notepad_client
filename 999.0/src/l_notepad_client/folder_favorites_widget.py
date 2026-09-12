@@ -8,11 +8,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import ctypes
 import ctypes.wintypes
+import threading
 import time
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, TypedDict
@@ -20,11 +24,23 @@ from typing import Optional, TypedDict
 from PySide6 import QtCore, QtGui, QtWidgets, Shiboken
 
 from . import paths
+from . import fav_vars
 from pytracemp import lprint
 
 
 # 三个收藏标签页（文件夹/网址/账号）通用的剪贴板条目载荷标记，用于跨标签复制粘贴
 FAV_ITEM_CLIPBOARD_MARKER = "__lnp_fav_item__"
+
+#: 收藏列表项图标边长（紧凑：文件夹/命令）
+_FAV_ICON_SIZE_COMPACT = 14
+#: 网址收藏页图标边长（favicon 本体可见边长，画布贴合无留白）
+_FAV_ICON_SIZE_URL = 20
+#: 收藏列表项行高与图标边长的差值（即项与项之间的间距）
+_FAV_ITEM_GAP_PX = 1
+#: 紧凑收藏列表项行高（文件夹/命令页）
+_FAV_ITEM_HEIGHT_COMPACT = 22
+#: 贴合画布时云角标相对紧凑设计的缩放（1.0=角标/图标比例与原紧凑观感一致）
+_FAV_BADGE_SCALE = 0.8
 
 
 def _favorites_copy_to_clipboard(data: dict) -> None:
@@ -134,6 +150,16 @@ class FavoriteEntry:
     def value(self, new_value: str) -> None:
         self._data[self.value_key] = new_value
 
+    # ── 内置变量展开（{y}{m}{d} / {pc} / {user} ...，见 fav_vars） ──
+    # name/value 保持磁盘与云同步的原始模板；只在执行、显示、复制时展开。
+    @property
+    def expanded_name(self) -> str:
+        return fav_vars.expand(self.name)
+
+    @property
+    def expanded_value(self) -> str:
+        return fav_vars.expand(self.value)
+
     # ── 行为（子类覆盖 open） ──
     def open(self, widget: "FolderFavoritesWidget") -> None:  # pragma: no cover - UI
         raise NotImplementedError
@@ -150,7 +176,7 @@ class FolderFavoriteEntry(FavoriteEntry):
     item_type = "folder"
 
     def open(self, widget: "FolderFavoritesWidget") -> None:  # pragma: no cover - UI
-        path = self.value
+        path = self.expanded_value
         if os.path.exists(path):
             widget._navigate_to_folder(path)
         else:
@@ -162,7 +188,7 @@ class UrlFavoriteEntry(FavoriteEntry):
     item_type = "url"
 
     def open(self, widget: "FolderFavoritesWidget") -> None:  # pragma: no cover - UI
-        url = self.value
+        url = self.expanded_value
         if not url:
             return
         # webbrowser.open() 在 Windows 上走 os.startfile()，把 URL 当 Shell 字符串，
@@ -186,7 +212,7 @@ class CommandFavoriteEntry(FavoriteEntry):
     item_type = "command"
 
     def open(self, widget: "FolderFavoritesWidget") -> None:  # pragma: no cover - UI
-        command = self.value
+        command = self.expanded_value
         if command:
             try:
                 subprocess.Popen(command, shell=True)
@@ -200,6 +226,35 @@ _ENTRY_TYPES: dict[str, type[FavoriteEntry]] = {
     "url": UrlFavoriteEntry,
     "command": CommandFavoriteEntry,
 }
+
+
+def attach_var_preview(layout, pairs, tooltip: str | None = None):
+    """给编辑对话框挂一行内置变量实时预览，返回 ``(label, refresh_fn)``。
+
+    *pairs* 为 ``[(标签, QLineEdit)]``；任一输入变化即重算展开结果。
+    保存的仍是原始模板文本，只在显示/执行/复制时展开。
+    联动同步走 ``blockSignals`` 时不会触发刷新，需手动调 ``refresh_fn()``。
+    """
+    def build() -> str:
+        return fav_vars.preview_text(
+            [(text, input_widget.text()) for text, input_widget in pairs]
+        )
+
+    label = QtWidgets.QLabel(build())
+    label.setWordWrap(True)
+    label.setStyleSheet(
+        "color: #89DDFF; background: rgba(255,255,255,12);"
+        " padding: 4px 6px; border-radius: 3px;"
+    )
+    label.setToolTip(tooltip or f"{fav_vars.VARIABLE_HELP}\n保存时仍存原始模板，仅显示/执行时展开。")
+
+    def refresh(*_args) -> None:
+        label.setText(build())
+
+    for _text, input_widget in pairs:
+        input_widget.textChanged.connect(refresh)
+    layout.addWidget(label)
+    return label, refresh
 
 
 class RenameItemDialog(QtWidgets.QDialog):
@@ -256,7 +311,12 @@ class RenameItemDialog(QtWidgets.QDialog):
         self.lock_checkbox = QtWidgets.QCheckBox(" 名称和值保持一致")
         self.lock_checkbox.setChecked(True)
         layout.addWidget(self.lock_checkbox)
-        
+
+        # 内置变量实时预览（{y}{m}{d}/{pc}/{user} ...）
+        _, self._var_refresh = attach_var_preview(
+            layout, [("名称", self.name_input), ("值", self.value_input)]
+        )
+
         # 设置联动逻辑
         self._setup_lock_logic()
         
@@ -281,11 +341,13 @@ class RenameItemDialog(QtWidgets.QDialog):
                     self.value_input.blockSignals(True)
                     self.value_input.setText(text)
                     self.value_input.blockSignals(False)
+                    self._update_preview()
                 
                 def sync_value_to_name(text):
                     self.name_input.blockSignals(True)
                     self.name_input.setText(text)
                     self.name_input.blockSignals(False)
+                    self._update_preview()
                 
                 # 保存引用以便后续使用
                 self._sync_name_to_value = sync_name_to_value
@@ -311,6 +373,10 @@ class RenameItemDialog(QtWidgets.QDialog):
         if self.lock_checkbox.isChecked():
             on_lock_changed(True)
     
+    def _update_preview(self, *_args) -> None:
+        """刷新变量预览（联动 setText 走了 blockSignals，需手动补一次）。"""
+        self._var_refresh()
+
     def get_result(self) -> tuple[str, str]:
         """获取修改后的名称和值"""
         return self.name_input.text().strip(), self.value_input.text().strip()
@@ -1590,21 +1656,260 @@ class ClipboardItemEditorDialog(QtWidgets.QDialog):
         self._source._apply_clipboard_item_to_system(new_item)
 
 
-def _icon_with_cloud(base_icon: QtGui.QIcon, synced: bool) -> QtGui.QIcon:
-    """组合图标：类型图标 + 右下角云角标（云同步=亮蓝，本地=灰）。"""
-    pm = QtGui.QPixmap(22, 22)
+def _icon_with_cloud(
+    base_icon: QtGui.QIcon,
+    synced: bool,
+    base_px: int = _FAV_ICON_SIZE_COMPACT,
+    *,
+    tight: bool = False,
+) -> QtGui.QIcon:
+    """组合图标：类型图标 + 右下角云角标（云同步=亮蓝，本地=灰）。
+
+    base_px 为类型图标边长。
+    - tight=False（紧凑页沿用）：画布留出角标外扩空间，图标本体只占画布约 2/3；
+    - tight=True（网址收藏页）：画布贴合图标本体、云角标压在右下角内，
+      这样 setIconSize(base_px) 后可见图标正好填满图标框，行间距才真的是设定的值。
+    """
+    color = QtGui.QColor("#5eb8f5") if synced else QtGui.QColor("#7a7a7a")
+    if tight:
+        canvas = max(1, base_px)
+        pm = QtGui.QPixmap(canvas, canvas)
+        pm.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(pm)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.drawPixmap(0, 0, base_icon.pixmap(base_px, base_px))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        # 角标（紧凑设计的角标簇）按同比例缩到画布右下角内部
+        k = base_px / float(_FAV_ICON_SIZE_COMPACT) * _FAV_BADGE_SCALE
+        origin_x = canvas - 10 * k
+        origin_y = canvas - 7 * k
+        for x, y, w, h in ((12, 14, 5, 4), (15, 11, 6, 5), (18, 14, 4, 3)):
+            painter.drawEllipse(
+                round(origin_x + (x - 12) * k),
+                round(origin_y + (y - 11) * k),
+                max(2, round(w * k)),
+                max(2, round(h * k)),
+            )
+        painter.end()
+        return QtGui.QIcon(pm)
+
+    scale = base_px / float(_FAV_ICON_SIZE_COMPACT)
+    canvas = max(1, round(22 * scale))
+    pm = QtGui.QPixmap(canvas, canvas)
     pm.fill(QtCore.Qt.GlobalColor.transparent)
     painter = QtGui.QPainter(pm)
     painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-    painter.drawPixmap(0, 3, base_icon.pixmap(14, 14))
-    color = QtGui.QColor("#5eb8f5") if synced else QtGui.QColor("#7a7a7a")
+    painter.drawPixmap(0, round(3 * scale), base_icon.pixmap(base_px, base_px))
     painter.setPen(QtCore.Qt.PenStyle.NoPen)
     painter.setBrush(color)
-    painter.drawEllipse(12, 14, 5, 4)
-    painter.drawEllipse(15, 11, 6, 5)
-    painter.drawEllipse(18, 14, 4, 3)
+    for x, y, w, h in ((12, 14, 5, 4), (15, 11, 6, 5), (18, 14, 4, 3)):
+        painter.drawEllipse(
+            round(x * scale), round(y * scale), round(w * scale), round(h * scale)
+        )
     painter.end()
     return QtGui.QIcon(pm)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 网址收藏 favicon（网页图标）自动获取
+#
+# 添加/加载网址收藏时，在后台线程自动访问一次该网址取站点图标：优先直接
+# GET 站点根 /favicon.ico（一次请求最快最稳，SPA 站点也适用），取不到再抓
+# 页面 HTML 解析 <link rel="icon">。图标转 PNG 缓存到
+# favorites/url_icons/<md5(scheme://host)>.png。列表渲染时直接读缓存。
+#
+# 缓存键只取协议+主机，与路径/模板变量（{date:...} 等）无关，因此每日变化
+# 的 URL 也不会重复抓取。抓取失败写 <key>.fail 标记（记录时间与原因），按
+# 原因分 TTL 不再重试：
+#   - network_error（超时/连接失败）：5 分钟后可重试，避免偶发抖动卡一整天
+#   - no_icon（确实访问到了但站点没有图标）：1 天后才重试，避免反复请求
+# ─────────────────────────────────────────────────────────────────────────
+
+#: 网址图标缓存子目录名（favorites/url_icons）
+_URL_ICONS_DIR_NAME = "url_icons"
+#: 站点确实没有图标时的失败标记有效期（秒）
+_URL_ICON_FAIL_TTL_SEC = 24 * 3600
+#: 网络/超时失败的重试间隔（秒），偶发抖动不长期卡住
+_URL_ICON_NET_ERR_TTL_SEC = 5 * 60
+#: 同时进行的图标抓取线程上限（避免大量收藏一次拉爆连接）
+_URL_ICON_MAX_CONCURRENT = 3
+#: 单个抓取请求超时（秒，内网站点首连/SSL 握手可能较慢）
+_URL_ICON_TIMEOUT_SEC = 15
+#: 单次响应最大读取字节（页面 HTML / 图标都足够）
+_URL_ICON_MAX_BYTES = 2 * 1024 * 1024
+#: 图标缓存边长（>= 列表显示尺寸，避免放大后发虚）
+_URL_ICON_CACHE_PX = 64
+
+_URL_ICON_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+_LINK_TAG_RE = re.compile(r"<link\b[^>]*>", re.IGNORECASE)
+_LINK_REL_RE = re.compile(r'rel\s*=\s*["\']([^"\']*)["\']', re.IGNORECASE)
+_LINK_HREF_RE = re.compile(r'<link\b[^>]*href\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+def _normalize_url(raw: str) -> str | None:
+    """把用户输入的网址规范化为 http(s) 绝对 URL；无效返回 None。
+
+    用 QUrl.fromUserInput 自动补协议头、识别 host:port，保证后续 urllib 可用。
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    qurl = QtCore.QUrl.fromUserInput(raw)
+    if not qurl.isValid() or qurl.scheme() not in ("http", "https"):
+        return None
+    return qurl.toString()
+
+
+def _url_icon_key(url: str) -> str:
+    """基于协议+主机计算 favicon 缓存 key（与路径/参数无关，稳定不重抓）。"""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = (parts.hostname or url).lower()
+        scheme = (parts.scheme or "http").lower()
+        key = f"{scheme}://{host}"
+    except Exception:  # noqa: BLE001
+        key = url
+    return hashlib.md5(key.encode("utf-8")).hexdigest()
+
+
+def _http_get_bytes(url: str, timeout: int) -> tuple[bytes | None, str, bool]:
+    """GET 请求，返回 ``(响应体, Content-Type, 是否成功连上服务器)``。
+
+    - 正常/4xx/5xx 响应：``(data|None, ctype, True)``（已到达服务器）
+    - 超时/连接失败/DNS：``(None, "", False)``
+    """
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _URL_ICON_USER_AGENT,
+            "Accept": "*/*",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = resp.read(_URL_ICON_MAX_BYTES)
+            ctype = resp.headers.get("Content-Type", "") or ""
+            return data, ctype, True
+    except urllib.error.HTTPError as e:
+        # 服务器有响应（404/403/500...）→ 视为"已到达站点"
+        ctype = e.headers.get("Content-Type", "") if e.headers else ""
+        return None, ctype, True
+    except Exception:  # noqa: BLE001 - 超时/内网/无网等连接层错误
+        return None, "", False
+
+
+def _parse_icon_candidates(html: bytes, base_url: str) -> list[str]:
+    """从网页 HTML 提取 favicon 链接（icon / shortcut icon / apple-touch-icon），
+    相对地址用 base_url 转绝对。"""
+    text = html.decode("utf-8", errors="ignore")
+    found: list[str] = []
+    for tag in _LINK_TAG_RE.findall(text):
+        rel = _LINK_REL_RE.search(tag)
+        if not rel:
+            continue
+        rels = {r.strip().lower() for r in rel.group(1).split()}
+        if "icon" not in rels and "apple-touch-icon" not in rels:
+            continue
+        href = _LINK_HREF_RE.search(tag)
+        if not href:
+            continue
+        url = urllib.parse.urljoin(base_url, href.group(1).strip())
+        if url.startswith(("http://", "https://")):
+            found.append(url)
+    return found
+
+
+def _looks_like_image(data: bytes, content_type: str) -> bool:
+    """粗略判断字节流是否为可渲染的图片（按魔数/Content-Type 判断）。"""
+    if not data:
+        return False
+    ct = (content_type or "").lower()
+    if "text" in ct or "html" in ct:
+        return False
+    head = data[:16]
+    if (
+        head.startswith(b"\x89PNG")
+        or head.startswith(b"\xff\xd8")          # jpeg
+        or head.startswith(b"GIF8")              # gif
+        or head.startswith(b"RIFF")              # webp
+        or (head.startswith(b"\x00\x00\x01\x00") and len(data) > 16)  # ico
+        or data.lstrip().startswith(b"<svg")
+    ):
+        return True
+    return ct.startswith("image/")
+
+
+def _load_icon_pixmap(data: bytes, content_type: str = "") -> QtGui.QPixmap | None:
+    """把 favicon 字节流加载为 QPixmap；SVG 走 QtSvg 栅格化，失败返回 None。"""
+    if not data:
+        return None
+    img = QtGui.QImage()
+    if img.loadFromData(data):
+        pm = QtGui.QPixmap.fromImage(img)
+        if not pm.isNull():
+            return pm
+    if "svg" in (content_type or "").lower() or data.lstrip().startswith(b"<svg"):
+        try:
+            from PySide6 import QtSvg
+        except Exception:  # noqa: BLE001
+            return None
+        try:
+            renderer = QtSvg.QSvgRenderer(QtCore.QByteArray(data))
+            pm = QtGui.QPixmap(64, 64)
+            pm.fill(QtCore.Qt.GlobalColor.transparent)
+            painter = QtGui.QPainter(pm)
+            renderer.render(painter)
+            painter.end()
+            if not pm.isNull():
+                return pm
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
+def _fetch_url_favicon_worker(
+    normalized_url: str,
+) -> tuple[str | None, bytes | None, str, str]:
+    """后台线程执行：访问网址一次，尝试取回站点图标。
+
+    返回 ``(icon_url, icon_bytes, content_type, status)``：
+    - status == "ok"             拿到图标
+    - status == "no_icon"        正常访问到站点但没有可用图标（应 1 天不重试）
+    - status == "network_error"  超时/连接失败（应尽快重试）
+    纯 stdlib（urllib），不在线程里碰 QWidget。
+    """
+    parts = urllib.parse.urlsplit(normalized_url)
+    root = f"{parts.scheme}://{parts.netloc}"
+    reached = False
+
+    # 1) 优先直接取站点根 favicon.ico（一次请求最快最稳，SPA 站点也适用）
+    ico_url = f"{root}/favicon.ico"
+    data, ctype, ok = _http_get_bytes(ico_url, _URL_ICON_TIMEOUT_SEC)
+    if ok:
+        reached = True
+    if data and _looks_like_image(data, ctype):
+        return ico_url, data, ctype, "ok"
+
+    # 2) 回退：抓页面 HTML 解析 <link rel="icon">
+    page, _ctype, ok2 = _http_get_bytes(normalized_url, _URL_ICON_TIMEOUT_SEC)
+    if ok2:
+        reached = True
+    candidates: list[str] = []
+    if page:
+        candidates = _parse_icon_candidates(page, normalized_url)
+    for icon_url in candidates:
+        d, c, _ = _http_get_bytes(icon_url, _URL_ICON_TIMEOUT_SEC)
+        if d and _looks_like_image(d, c):
+            return icon_url, d, c, "ok"
+
+    if not reached:
+        return None, None, "", "network_error"
+    return None, None, "", "no_icon"
 
 
 class FolderFavoritesWidget(QtWidgets.QWidget):
@@ -1614,6 +1919,8 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
     caller_info_changed = QtCore.Signal(str)
     # 剪贴板历史后台加载完成（携带 list[dict]），用于在主线程重建 model
     _clipboard_loaded_signal = QtCore.Signal(object)
+    # 网址 favicon 后台抓取完成（携带 (key, url, icon_url, data, content_type)）
+    _url_icon_done_signal = QtCore.Signal(object)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None, restart_callback=None) -> None:
         super().__init__(parent)
@@ -1635,27 +1942,69 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         self._clipboard_save_timer.timeout.connect(self._save_clipboard_history)
         self._cloud_api = None  # NotepadApi（带登录 token）；None=未登录（云 item 隐藏）
         self._setup_data()
+        # 列表行号 → 收藏 dict（真实对象）映射，随 _refresh_list 重建。
+        # 不能用 item.data(UserRole)：PySide6 会经 QVariant 深拷贝 dict，
+        # 取回的只是副本，无法按对象身份定位回 self.favorites。此映射在
+        # 渲染时按“过滤后可见顺序”记录真实对象，供增删改直接命中。
+        self._row_to_fav: dict[int, dict] = {}
+        # 网址 favicon 缓存与后台抓取状态
+        self._url_icons_dir = self.favorites_dir / _URL_ICONS_DIR_NAME
+        self._url_icons_dir.mkdir(parents=True, exist_ok=True)
+        self._url_icon_fetching: set[str] = set()   # 抓取中的 key
+        self._url_icon_pending: dict[str, str] = {}  # 待抓取 key → 规范化 URL
+        self._url_icon_schedule_timer = QtCore.QTimer(self)
+        self._url_icon_schedule_timer.setSingleShot(True)
+        self._url_icon_schedule_timer.setInterval(500)
+        self._url_icon_schedule_timer.timeout.connect(self._start_pending_url_icon_fetches)
+        self._url_icon_refresh_timer = QtCore.QTimer(self)
+        self._url_icon_refresh_timer.setSingleShot(True)
+        self._url_icon_refresh_timer.setInterval(200)
+        self._url_icon_refresh_timer.timeout.connect(self._refresh_list)
+        self._url_icon_done_signal.connect(self._on_url_icon_done)
         QtCore.QTimer.singleShot(0, self.finalize_ui)
 
+    def _favorites_icon_size(self) -> int:
+        """收藏列表项图标边长：网址收藏页用 favicon 本体尺寸（画布贴合）。"""
+        if getattr(self, "_favorites_kind", "folder") == "url":
+            return _FAV_ICON_SIZE_URL
+        return _FAV_ICON_SIZE_COMPACT
+
+    def _favorites_icon_tight(self) -> bool:
+        """网址收藏页用贴合画布（无透明留白），行距才是设定值。"""
+        return getattr(self, "_favorites_kind", "folder") == "url"
+
+    def _favorites_item_height(self) -> int:
+        """收藏列表项行高：网址页 = 图标边长 + 间距；紧凑页保持原行高。"""
+        if self._favorites_icon_tight():
+            return self._favorites_icon_size() + _FAV_ITEM_GAP_PX
+        return _FAV_ITEM_HEIGHT_COMPACT
+
     def _apply_favorites_list_compact_style(self) -> None:
-        """压缩收藏夹列表项间距，让路径列表更密集。"""
+        """压缩收藏夹列表项间距，让路径列表更密集。
+
+        网址收藏页展示的是站点 favicon（图标需醒目），按紧凑尺寸的 3 倍放大，
+        并抬高行高避免图标被裁切；其它收藏种类保持紧凑。
+        """
+        icon_px = self._favorites_icon_size()
+        obj_name = self.list_widget.objectName() or "folder_favorites_list"
         self.list_widget.setSpacing(0)
         self.list_widget.setUniformItemSizes(True)
-        self.list_widget.setIconSize(QtCore.QSize(14, 14))
+        self.list_widget.setIconSize(QtCore.QSize(icon_px, icon_px))
         self.list_widget.setStyleSheet(
-            """
-            QListWidget#folder_favorites_list {
+            f"""
+            QListWidget#{obj_name} {{
                 padding: 1px 2px;
                 outline: none;
-            }
-            QListWidget#folder_favorites_list::item {
-                min-height: 18px;
-                padding: 1px 6px;
+            }}
+            QListWidget#{obj_name}::item {{
+                min-height: {self._favorites_item_height()}px;
+                padding: 0px 1px;
                 margin: 0;
-            }
-            QListWidget#folder_favorites_list::item:selected {
+                font-size: 18px;
+            }}
+            QListWidget#{obj_name}::item:selected {{
                 border-radius: 4px;
-            }
+            }}
             """
         )
 
@@ -1712,14 +2061,13 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
             fallback_kind=self._favorites_kind
         )
 
-    def _toggle_cloud(self, row: int) -> None:
+    def _toggle_cloud(self, fav: dict) -> None:
         """右键切换：本地 ↔ 云同步。"""
-        if row < 0 or row >= len(self.favorites):
+        if not isinstance(fav, dict):
             return
         if not self._cloud_ready():
             QtWidgets.QMessageBox.information(self, "提示", "请先登录后再使用云同步")
             return
-        fav = self.favorites[row]
         try:
             if fav.get("cloud"):
                 if fav.get("id"):
@@ -1890,14 +2238,14 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
             menu.addSeparator()
             menu.addAction(" 执行").triggered.connect(self._execute_item)
             menu.addAction(" 编辑").triggered.connect(
-                lambda: self._rename_item(self.list_widget.currentRow()))
+                lambda: self._rename_item(self._current_fav()))
             menu.addAction(" 删除").triggered.connect(self._remove_item)
         elif kind == "url":
             menu.addAction(" 添加网址").triggered.connect(self._add_url)
             menu.addSeparator()
             menu.addAction(" 打开").triggered.connect(self._execute_item)
             menu.addAction(" 编辑").triggered.connect(
-                lambda: self._rename_item(self.list_widget.currentRow()))
+                lambda: self._rename_item(self._current_fav()))
             menu.addAction(" 删除").triggered.connect(self._remove_item)
         else:
             menu.addAction(" 添加当前文件夹").triggered.connect(self._add_current_folder)
@@ -1905,7 +2253,7 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
             menu.addSeparator()
             menu.addAction(" 打开").triggered.connect(self._execute_item)
             menu.addAction(" 编辑").triggered.connect(
-                lambda: self._rename_item(self.list_widget.currentRow()))
+                lambda: self._rename_item(self._current_fav()))
             menu.addAction(" 删除").triggered.connect(self._remove_item)
 
         # 云同步：把当前所有本地项一次性上传到数据库（仅登录后可用）
@@ -1960,6 +2308,7 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
             self._filter_index = 3  # 仅显示命令
             self._migrate_commands_from_legacy()
         if getattr(self, "_ui_initialized", False) and getattr(self, "list_widget", None) is not None:
+            self._apply_favorites_list_compact_style()  # 图标尺寸随种类变化（网址页放大）
             self._refresh_list()
 
     def _migrate_commands_from_legacy(self) -> None:
@@ -2152,7 +2501,11 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         # 操作按钮与显示筛选已合并到「文件夹收藏」标签的右键菜单，见 show_actions_menu()
 
         # 说明标签
-        hint_label = QtWidgets.QLabel("提示: 右键「文件夹收藏」标签可添加/执行/删除并切换显示类型")
+        hint_label = QtWidgets.QLabel(
+            "提示: 右键「文件夹收藏」标签可添加/执行/删除并切换显示类型；"
+            "名称与路径支持 {y}{m}{d} {wd} {hh}{mi}{ss} {pc} {user} 等变量"
+        )
+        hint_label.setToolTip(fav_vars.VARIABLE_HELP)
         hint_label.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint_label)
 
@@ -2376,6 +2729,7 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
     def _refresh_list(self) -> None:
         """刷新列表"""
         self.list_widget.clear()
+        self._row_to_fav = {}
         filter_type = getattr(self, "_filter_index", 0)
     
         # 创建图标缓存
@@ -2413,30 +2767,149 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
                 if filter_type == 2 and item_type != "url":
                     continue
     
-            # 创建列表项
+            # 创建列表项（名称/路径等按内置变量实时展开；存盘仍是模板原文）
+            entry = FavoriteEntry.from_dict(fav)
+            disp_name = entry.expanded_name
             if item_type == "folder":
-                display_text = f" {fav.get('path', '')}"
+                display_text = f" {entry.expanded_value}"
                 icon = folder_icon
             elif item_type == "url":
-                url = fav.get("url", "")
-                name = fav.get("name", "")
-                display_text = f" {name}  —  {url}" if url else f" {name}"
-                icon = QtGui.QIcon()  # 网址暂无图标
+                disp_val = entry.expanded_value
+                display_text = f" {disp_name}  —  {disp_val}" if disp_val else f" {disp_name}"
+                icon = self._url_icon_for(disp_val)
+                self._maybe_schedule_url_icon(disp_val)
             elif item_type == "command":
-                display_text = f" {fav.get('name', '')}"
+                display_text = f" {disp_name or entry.expanded_value}"
                 icon = command_icon
             else:
                 # 跨标签粘贴来的异类条目（如账号）：尽量显示名称
-                display_text = f" {fav.get('name', '') or fav.get('username', '') or '条目'}"
+                display_text = f" {disp_name or fav.get('username', '') or '条目'}"
                 icon = QtGui.QIcon()
     
             item = QtWidgets.QListWidgetItem(
-                _icon_with_cloud(icon, bool(fav.get("cloud"))), display_text
+                _icon_with_cloud(
+                    icon,
+                    bool(fav.get("cloud")),
+                    self._favorites_icon_size(),
+                    tight=self._favorites_icon_tight(),
+                ),
+                display_text,
             )
-            item.setSizeHint(QtCore.QSize(0, 20))
+            item.setSizeHint(QtCore.QSize(0, self._favorites_item_height()))
             item.setData(QtCore.Qt.UserRole, fav)
             self.list_widget.addItem(item)
-    
+            self._row_to_fav[self.list_widget.count() - 1] = fav
+
+    # ── 网址 favicon：读取缓存 / 后台抓取 ──
+    def _url_icon_path(self, key: str) -> Path:
+        return self._url_icons_dir / f"{key}.png"
+
+    def _url_icon_fail_marker(self, key: str) -> Path:
+        return self._url_icons_dir / f"{key}.fail"
+
+    def _url_icon_for(self, url: str) -> QtGui.QIcon:
+        """返回网址对应的 favicon；无缓存时回退默认「链接」图标。"""
+        if url:
+            path = self._url_icon_path(_url_icon_key(url))
+            if path.exists():
+                return QtGui.QIcon(str(path))
+        return self.style().standardIcon(QtWidgets.QStyle.SP_FileLinkIcon)
+
+    def _maybe_schedule_url_icon(self, url: str) -> None:
+        """网址项缺缓存图标时登记待抓取（防抖合并；失败标记按原因分 TTL 重试）。"""
+        normalized = _normalize_url(url)
+        if not normalized:
+            return
+        key = _url_icon_key(normalized)
+        if key in self._url_icon_fetching or key in self._url_icon_pending:
+            return
+        if self._url_icon_path(key).exists():
+            return
+        marker = self._url_icon_fail_marker(key)
+        if marker.exists():
+            if not self._url_icon_marker_expired(marker):
+                return
+        self._url_icon_pending[key] = normalized
+        self._url_icon_schedule_timer.start()
+
+    @staticmethod
+    def _url_icon_marker_expired(marker: Path) -> bool:
+        """判断失败标记是否已过 TTL。兼容旧格式（纯时间戳字符串，按 no_icon 处理）。"""
+        try:
+            raw = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            return True
+        ts: float = 0.0
+        status = ""
+        try:
+            meta = json.loads(raw)
+            if isinstance(meta, dict):
+                ts = float(meta.get("t", 0))
+                status = str(meta.get("s", ""))
+            else:
+                ts = float(raw)
+        except Exception:  # noqa: BLE001 - 解析失败视为过期，允许重试
+            return True
+        ttl = (
+            _URL_ICON_NET_ERR_TTL_SEC
+            if status == "network_error"
+            else _URL_ICON_FAIL_TTL_SEC
+        )
+        return (time.time() - ts) >= ttl
+
+    def _start_pending_url_icon_fetches(self) -> None:
+        """把待抓取队列派发到后台线程（限制并发数，完成回调继续排空）。"""
+        while self._url_icon_pending:
+            if len(self._url_icon_fetching) >= _URL_ICON_MAX_CONCURRENT:
+                return
+            key, url = next(iter(self._url_icon_pending.items()))
+            del self._url_icon_pending[key]
+            if key in self._url_icon_fetching or self._url_icon_path(key).exists():
+                continue
+            self._url_icon_fetching.add(key)
+            threading.Thread(
+                target=self._url_icon_fetch_worker_entry, args=(key, url), daemon=True
+            ).start()
+
+    def _url_icon_fetch_worker_entry(self, key: str, url: str) -> None:
+        """后台线程入口：访问网址取图标，结果回主线程处理。"""
+        icon_url, data, ctype, status = _fetch_url_favicon_worker(url)
+        self._url_icon_done_signal.emit((key, url, icon_url, data, ctype, status))
+
+    @QtCore.Slot(object)
+    def _on_url_icon_done(self, payload: tuple) -> None:
+        """主线程处理抓取结果：转换缓存 PNG 或按原因写失败标记，再刷新列表。"""
+        key, url, _icon_url, data, ctype, status = payload
+        self._url_icon_fetching.discard(key)
+        path = self._url_icon_path(key)
+        marker = self._url_icon_fail_marker(key)
+        if data:
+            pm = _load_icon_pixmap(data, ctype or "")
+            if pm is not None and not pm.isNull():
+                pm = pm.scaled(
+                    _URL_ICON_CACHE_PX, _URL_ICON_CACHE_PX,
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
+                if pm.save(str(path), "PNG"):
+                    try:
+                        marker.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    lprint(f"[网址收藏] 已获取网页图标: {url} -> {path.name}")
+                    self._url_icon_refresh_timer.start()
+                    self._start_pending_url_icon_fetches()
+                    return
+        # 抓取失败：写失败标记（含时间与原因，按原因分 TTL 重试）
+        try:
+            marker.write_text(
+                json.dumps({"t": time.time(), "s": status or "no_icon"}),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        self._start_pending_url_icon_fetches()
+
     def _on_items_reordered(self) -> None:
         """拖拽排序完成后，更新 self.favorites 的顺序并保存"""
         # 从 UI 列表重建 favorites 顺序
@@ -2521,9 +2994,11 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         # 网址链接输入
         url_label = QtWidgets.QLabel("网址链接:")
         url_input = QtWidgets.QLineEdit()
-        url_input.setPlaceholderText("例如：https://github.com")
+        url_input.setPlaceholderText("例如：https://github.com/{date:%Y%m%d}")
         layout.addWidget(url_label)
         layout.addWidget(url_input)
+
+        attach_var_preview(layout, [("名称", name_input), ("网址", url_input)])
         
         # 按钮
         button_box = QtWidgets.QDialogButtonBox(
@@ -2550,25 +3025,44 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
             self._save_favorites()
             self._refresh_list()
 
+    def _current_fav(self) -> dict | None:
+        """当前列表选中项的收藏 dict（真实对象）。
+
+        列表可能被筛选（如「全部」标签里隐藏命令、或按类型过滤），导致
+        list_widget 的行号与 self.favorites 的下标不一致；且 item.data(UserRole)
+        返回的是 QVariant 深拷贝的副本，无法按对象身份定位回 self.favorites。
+        这里用 _refresh_list 渲染时记录的「行号 → 真实对象」映射，最稳。
+        """
+        return self._row_to_fav.get(self.list_widget.currentRow())
+
     def _remove_item(self) -> None:
         """删除选中的项目"""
-        current_row = self.list_widget.currentRow()
-        if current_row >= 0 and current_row < len(self.favorites):
-            fav = self.favorites[current_row]
-            if fav.get("cloud") and self._cloud_ready() and fav.get("id"):
-                try:
-                    self._cloud_api.delete_fav_item(fav["id"])
-                except Exception as exc:  # noqa: BLE001
-                    lprint(f"[收藏云同步] 删除云端失败: {exc}")
-            del self.favorites[current_row]
+        fav = self._current_fav()
+        if fav is None:
+            return
+        if fav.get("cloud") and self._cloud_ready() and fav.get("id"):
+            try:
+                self._cloud_api.delete_fav_item(fav["id"])
+            except Exception as exc:  # noqa: BLE001
+                lprint(f"[收藏云同步] 删除云端失败: {exc}")
+        idx = self._find_fav_index(fav)
+        if idx >= 0:
+            del self.favorites[idx]
             self._save_favorites()
             self._refresh_list()
 
+    def _find_fav_index(self, fav: dict) -> int:
+        """按对象身份在 self.favorites 中定位条目下标（返回 -1 表示不存在）。"""
+        for i, f in enumerate(self.favorites):
+            if f is fav:
+                return i
+        return -1
+
     def _execute_item(self) -> None:
         """执行选中的项目"""
-        current_row = self.list_widget.currentRow()
-        if current_row >= 0 and current_row < len(self.favorites):
-            FavoriteEntry.from_dict(self.favorites[current_row]).open(self)
+        fav = self._current_fav()
+        if fav is not None:
+            FavoriteEntry.from_dict(fav).open(self)
 
     def _navigate_to_folder(self, folder_path: str) -> None:
         """导航到指定文件夹：优先 COM 直接驱动 Explorer，失败再回退按键模拟。"""
@@ -2817,14 +3311,16 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         if item:
             menu = QtWidgets.QMenu()
 
-            # 右键默认不改变选中项，导致下游 currentRow() 取到的是“上一次左键选中的行”
+            # 右键默认不改变选中项，导致下游 currentItem() 取到的是“上一次左键选中的行”
             # 而非本次右键点击的行；这里把右键命中的行强制设为当前行，保证
             # 修改/复制/删除/执行等操作都作用于右键点击的那个条目。
             clicked_row = self.list_widget.row(item)
             self.list_widget.setCurrentRow(clicked_row)
-            current_row = clicked_row
-            if current_row >= 0 and current_row < len(self.favorites):
-                fav = self.favorites[current_row]
+            # 直接取渲染时记录的真实对象，避免列表被筛选（隐藏部分条目）后行号与
+            # self.favorites 下标错位，也避免 item.data(UserRole) 的深拷贝副本
+            # 导致改名/云切换写不回去。
+            fav = self._row_to_fav.get(clicked_row)
+            if isinstance(fav, dict):
                 entry = FavoriteEntry.from_dict(fav)
                 item_type = entry.item_type
 
@@ -2844,7 +3340,7 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
                 if item_type == "folder":
                     navigate_action = QtGui.QAction(" 跳转到此文件夹", self)
                     navigate_action.triggered.connect(
-                        lambda checked=False, v=entry.value: self._navigate_to_folder(v)
+                        lambda checked=False, v=entry.expanded_value: self._navigate_to_folder(v)
                     )
                 else:
                     navigate_action = None
@@ -2853,18 +3349,18 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
                 if copy_val_lbl:
                     copy_path_action = QtGui.QAction(f" {copy_val_lbl}", self)
                     copy_path_action.triggered.connect(
-                        lambda checked=False, v=entry.value: self._copy_path_to_clipboard(v)
+                        lambda checked=False, v=entry.expanded_value: self._copy_path_to_clipboard(v)
                     )
                 else:
                     copy_path_action = None
 
                 rename_action = QtGui.QAction(f" {rename_lbl}", self)
                 rename_action.triggered.connect(
-                    lambda checked=False, r=current_row: self._rename_item(r)
+                    lambda checked=False, f=fav: self._rename_item(f)
                 )
                 copy_name_action = QtGui.QAction(f" {copy_name_lbl}", self)
                 copy_name_action.triggered.connect(
-                    lambda checked=False, n=entry.name: self._copy_name_to_clipboard(n)
+                    lambda checked=False, n=entry.expanded_name: self._copy_name_to_clipboard(n)
                 )
 
                 execute_action.triggered.connect(self._execute_item)
@@ -2881,7 +3377,7 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
                     "☁ 转为本地" if fav.get("cloud") else "☁ 同步到云", self
                 )
                 cloud_action.triggered.connect(
-                    lambda: self._toggle_cloud(current_row)
+                    lambda: self._toggle_cloud(fav)
                 )
                 menu.addAction(cloud_action)
 
@@ -2947,11 +3443,10 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         clipboard.setText(name)
         lprint(f"已复制名称到剪贴板: {name}")
 
-    def _rename_item(self, row: int) -> None:
-        """重命名选中的项目"""
-        if row < 0 or row >= len(self.favorites):
+    def _rename_item(self, fav: dict) -> None:
+        """重命名收藏夹项目（按条目 dict 定位，避免列表筛选导致行号错位）。"""
+        if not isinstance(fav, dict):
             return
-        fav: FavoriteItem = self.favorites[row]
         entry = FavoriteEntry.from_dict(fav)
         item_type = entry.item_type
 
@@ -3001,9 +3496,11 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         # 命令内容输入
         command_label = QtWidgets.QLabel("命令内容:")
         command_input = QtWidgets.QLineEdit()
-        command_input.setPlaceholderText("请输入要执行的命令")
+        command_input.setPlaceholderText("请输入要执行的命令，可用 {y}{m}{d} {pc} {user} 等变量")
         layout.addWidget(command_label)
         layout.addWidget(command_input)
+
+        attach_var_preview(layout, [("名称", name_input), ("命令", command_input)])
         
         # 按钮
         button_box = QtWidgets.QDialogButtonBox(

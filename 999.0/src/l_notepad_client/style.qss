@@ -246,28 +246,40 @@ QTabBar QPushButton:hover {
   border: none;
 }
 
+/* 滚动条：内容很长时手柄会被压得极小抓不住，故加粗条身 + 限定手柄最小长度 */
 QScrollBar:vertical, QScrollBar:horizontal {
   background: rgba(255,255,255,0.035);
   border: none;
   border-radius: 6px;
-  margin: 2px;
+  margin: 1px;
 }
 
 QScrollBar:vertical {
-  width: 10px;
+  width: 12px;
 }
 
 QScrollBar:horizontal {
-  height: 10px;
+  height: 12px;
 }
 
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-  background: rgba(137, 221, 255, 0.24);
+QScrollBar::handle:vertical {
+  background: rgba(137, 221, 255, 0.36);
   border-radius: 5px;
+  min-height: 40px;
+}
+
+QScrollBar::handle:horizontal {
+  background: rgba(137, 221, 255, 0.36);
+  border-radius: 5px;
+  min-width: 40px;
 }
 
 QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-  background: rgba(137, 221, 255, 0.38);
+  background: rgba(137, 221, 255, 0.55);
+}
+
+QScrollBar::handle:vertical:pressed, QScrollBar::handle:horizontal:pressed {
+  background: rgba(137, 221, 255, 0.75);
 }
 
 QScrollBar::add-line, QScrollBar::sub-line {

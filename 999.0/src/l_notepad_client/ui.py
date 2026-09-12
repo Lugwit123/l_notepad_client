@@ -92,6 +92,29 @@ SERVER_LOG_PREFIX = "__server_log__:"
 SERVER_LOG_FOLDER_ID = "__server_log_folder__"
 SERVER_LOG_SUB_PREFIX = "__server_log_sub__:"
 EXTERNAL_FILES_STATE_NAME = "external_files.json"
+# 本地文件外部修改轮询间隔（毫秒）：QFileSystemWatcher 丢目标时的兜底
+_LOCAL_FILE_POLL_MS = 1500
+
+
+def _local_files_from_mime(mime) -> list[str]:
+    """从拖放数据中取出本地文件路径（资源管理器拖入的 uri-list）。"""
+    if mime is None:
+        return []
+    try:
+        if not mime.hasUrls():
+            return []
+        paths: list[str] = []
+        for url in mime.urls():
+            if not url.isLocalFile():
+                continue
+            raw = url.toLocalFile()
+            if raw:
+                paths.append(str(Path(raw)))
+        return paths
+    except Exception:
+        return []
+# 收藏笔记在笔记树/列表中使用的全局置顶分组名
+FAVORITES_GROUP_NAME = "★ 收藏"
 LOG_VIEW_CONTENT_CACHE_KEY = "__l_notepad_log_view__"
 LOG_LEVEL = logging.INFO
 logging.basicConfig(
@@ -292,16 +315,65 @@ class _NotesLoaderThread(QtCore.QThread):
 # ---- 左侧文件树 delegate：将 "文件名\n日期" 分别绘制成两行不同颜色 ----
 
 class _NoteTreeItemDelegate(QtWidgets.QStyledItemDelegate):
-    """将 item 文本按换行符拆分成两行：第一行文件名粗体，第二行日期橙色。"""
+    """将 item 文本按换行符拆分成两行：第一行文件名粗体，第二行日期橙色。
+
+    同时（参考 l_pyside6_uv 的 StarDelegate）在笔记项右侧绘制收藏星标：
+    - 已收藏始终显示实心 ★；
+    - 未收藏仅在鼠标悬停该行时显示空心 ☆；
+    - 鼠标移到右侧星标热区时，星标在 ☆/★ 间切换作为可点击反馈。
+    """
 
     _COLOR_MAIN = QtGui.QColor("#E9EEF5")
     _COLOR_DATE = QtGui.QColor("#FFA657")
     _COLOR_FOLDER = QtGui.QColor("#89DDFF")
     _COLOR_ASK_AI = QtGui.QColor("#B794F4")
+    _COLOR_STAR = QtGui.QColor("#FFB800")
+    # 硬盘上已删除的文件条目（✕ 标记）用告警色
+    _COLOR_MISSING = QtGui.QColor("#FF6B6B")
+    # 左侧填充
+    _PADDING_LEFT = 2
+    # 星标可点击热区宽度（从右侧边缘往左）
+    STAR_HOTZONE = 26
     # 父级目录高亮叠加色（alpha 0.8）
     _COLOR_PARENT_HIGHLIGHT = QtGui.QColor(77, 130, 220, 24)
     # 标记 item 为“父级高亮”的自定义 role
     _PARENT_HIGHLIGHT_ROLE = QtCore.Qt.ItemDataRole.UserRole + 99
+
+    def __init__(self, parent=None, owner=None) -> None:
+        super().__init__(parent)
+        self._owner = owner
+
+    def _star_state(self, option, index) -> tuple[bool, str | None]:
+        """返回 (是否已收藏, 需要绘制的星标字符)；None 表示无需绘制。"""
+        key = self._favorite_key_for_role(
+            index.data(QtCore.Qt.ItemDataRole.UserRole)
+        )
+        if key is None:
+            return False, None
+        owner = self._owner
+        fav = bool(owner is not None and owner._is_favorite(key))
+        view = option.widget
+        hovered = bool(view is not None and getattr(view, "_fav_hover_key", None) == key)
+        if not fav and not hovered:
+            return fav, None
+        star_over = hovered and bool(getattr(view, "_fav_hover_star", False))
+        # 悬停到热区时反转星标（实心↔空心）作为可点击反馈
+        if star_over:
+            star = "\u2606" if fav else "\u2605"
+        else:
+            star = "\u2605" if fav else "\u2606"
+        return fav, star
+
+    @staticmethod
+    def _favorite_key_for_role(role):
+        """把 item 的 UserRole 转成收藏 key：笔记 int / 外部与 IPC 文件 str / 其它 None。"""
+        if isinstance(role, int) and not isinstance(role, bool):
+            return int(role)
+        if isinstance(role, str) and (
+            role.startswith(EXTERNAL_FILE_PREFIX) or role.startswith(IPC_FILE_PREFIX)
+        ):
+            return role
+        return None
 
     def paint(self, painter, option, index):
         # 先绘制背景/选中等默认样式
@@ -338,6 +410,16 @@ class _NoteTreeItemDelegate(QtWidgets.QStyledItemDelegate):
                     color = self._COLOR_FOLDER
                 elif role == ASK_AI_ITEM_ID:
                     color = self._COLOR_ASK_AI
+                elif (
+                    isinstance(role, str)
+                    and (
+                        role.startswith(EXTERNAL_FILE_PREFIX)
+                        or role.startswith(IPC_FILE_PREFIX)
+                    )
+                    and part.lstrip().startswith("✕")
+                ):
+                    # 文件已在硬盘上删除：告警色（不做 I/O，只认渲染时的 ✕ 前缀）
+                    color = self._COLOR_MISSING
                 else:
                     color = self._COLOR_MAIN
                 font.setBold(True)
@@ -354,6 +436,21 @@ class _NoteTreeItemDelegate(QtWidgets.QStyledItemDelegate):
                 line_rect,
                 QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignLeft,
                 part,
+            )
+            painter.restore()
+
+        # 右侧收藏星标（参考 l_pyside6_uv StarDelegate）
+        _fav, star = self._star_state(option, index)
+        if star is not None:
+            painter.save()
+            painter.setPen(QtGui.QPen(self._COLOR_STAR))
+            star_font = QtGui.QFont(option.font)
+            star_font.setPointSize(14)
+            painter.setFont(star_font)
+            painter.drawText(
+                option.rect.adjusted(0, 0, -8, 0),
+                QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                star,
             )
             painter.restore()
 
@@ -736,7 +833,8 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self.state = UiState()
         self._allow_close = False
         self._settings = QtCore.QSettings("Lugwit", "l_notepad_pc")
-        self._favorite_order: list[int] = []
+        # 收藏顺序：笔记用 int(note_id)，外部/IPC 文件用带前缀的路径字符串
+        self._favorite_order: list[int | str] = []
         # 手动排序：相对路径(note.title)的全局有序列表，持久化到配置目录的 note_order.json
         self._note_order: list[str] = []
         # 中键拖拽调序的临时状态
@@ -761,6 +859,18 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self._current_external_file: str | None = None
         self._current_ipc_file: str | None = None
         self._current_server_log_path: str | None = None
+        # 本地文件（笔记 / 外部文件）外部变更检测：记录加载快照 + 文件监视/轮询
+        self._loaded_local_file_path: str | None = None
+        self._loaded_local_file_mtime: float | None = None
+        self._loaded_local_file_size: int | None = None
+        self._local_file_reload_prompting = False
+        self._local_file_watcher = QtCore.QFileSystemWatcher(self)
+        self._local_file_watcher.fileChanged.connect(self._on_local_file_watch_event)
+        self._local_file_watcher.directoryChanged.connect(self._on_local_file_watch_event)
+        # 轮询兜底：编辑器「原子替换」写盘会让 QFileSystemWatcher 丢目标，靠 mtime 复核
+        self._local_file_poll_timer = QtCore.QTimer(self)
+        self._local_file_poll_timer.setInterval(_LOCAL_FILE_POLL_MS)
+        self._local_file_poll_timer.timeout.connect(self._poll_local_file_changed)
         self._ai_sessions: dict[str, AiSession] = {}
         self._current_ai_session_id: str | None = None
         self._ai_request_seq = 0
@@ -948,6 +1058,10 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             self.notes_list.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
             self.notes_list.customContextMenuRequested.connect(self._on_notes_list_context_menu)
             self.notes_list.model().rowsMoved.connect(self._on_notes_rows_moved)
+            # 接收资源管理器拖入的文件 → 归类「外部文件」分组
+            self.notes_list.setAcceptDrops(True)
+            self.notes_list.viewport().setAcceptDrops(True)
+            self.notes_list.viewport().installEventFilter(self)
 
         self.search_edit.textChanged.connect(self._apply_filter)
 
@@ -1101,6 +1215,90 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
 
     def _note_file_path(self, title: str) -> Path:
         return self._notepad_list_dir() / title
+
+    @staticmethod
+    def _file_missing(file_path: str) -> bool:
+        """文件在硬盘上是否已不存在（列表 ✕ 标记、刷新清理共用）。"""
+        try:
+            return not Path(file_path).is_file()
+        except OSError:
+            return True
+
+    def _file_entry_marker(self, file_path: str) -> tuple[str, bool]:
+        """文件条目的箭头/删除标记：硬盘上已不存在时用 ✕，返回 (标记, 是否已删除)。"""
+        missing = self._file_missing(file_path)
+        return ("✕" if missing else "↗"), missing
+
+    def _file_entry_tooltip(self, file_path: str, missing: bool) -> str:
+        if missing:
+            return f"{file_path}\n文件已不存在（硬盘上已删除）——点底部「刷新」清理该条目"
+        return file_path
+
+    @staticmethod
+    def _missing_entry_color() -> QtGui.QColor:
+        return QtGui.QColor("#FF6B6B")
+
+    def _item_local_file_path(self, item_id, title: str | None = None) -> Path | None:
+        """笔记 / 外部 / IPC 文件条目 → 磁盘文件路径；其它条目返回 None。"""
+        if isinstance(item_id, int) and not isinstance(item_id, bool):
+            if not title:
+                return None
+            return self._note_file_path(title)
+        if isinstance(item_id, str):
+            if item_id.startswith(EXTERNAL_FILE_PREFIX):
+                return Path(item_id[len(EXTERNAL_FILE_PREFIX):])
+            if item_id.startswith(IPC_FILE_PREFIX):
+                return Path(item_id[len(IPC_FILE_PREFIX):])
+        return None
+
+    def _copy_text_to_clipboard(self, text: str, *, label: str = "") -> None:
+        """复制文本到剪贴板并给状态栏反馈（空内容忽略）。"""
+        value = str(text or "")
+        if not value:
+            self.status.showMessage("没有可复制的内容", 2500)
+            return
+        try:
+            QtWidgets.QApplication.clipboard().setText(value)
+        except Exception as exc:
+            lprint(f"复制到剪贴板失败：{exc}")
+            self.status.showMessage(f"复制失败：{exc}", 4000)
+            return
+        self.status.showMessage(f"已复制{label}：{value}", 3000)
+
+    def _open_path_in_explorer(self, path: Path) -> None:
+        """在资源管理器中定位文件（选中）或打开文件夹。"""
+        try:
+            if path.is_dir():
+                target_dir = path
+                select = None
+            elif path.exists():
+                target_dir = path.parent
+                select = path
+            else:
+                # 文件已被删除/移动：退到最近的已存在父目录，避免 Explorer 弹错误框
+                parent = path.parent
+                while parent != parent.parent and not parent.exists():
+                    parent = parent.parent
+                if not parent.exists():
+                    self.status.showMessage(f"文件不存在：{path}", 4000)
+                    return
+                target_dir, select = parent, None
+        except OSError:
+            self.status.showMessage(f"文件不存在：{path}", 4000)
+            return
+        try:
+            if sys.platform == "win32":
+                if select is not None:
+                    subprocess.Popen(["explorer", "/select,", str(select)])
+                else:
+                    subprocess.Popen(["explorer", str(target_dir)])
+            else:
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(target_dir)))
+        except Exception as exc:
+            lprint(f"打开所在文件夹失败：{path} ({exc})")
+            self.status.showMessage(f"打开所在文件夹失败：{exc}", 4000)
+            return
+        self.status.showMessage(f"已在资源管理器中打开：{target_dir}", 2500)
 
     def _on_tab_bar_context_menu(self, pos) -> None:
         """右键标签栏时弹出操作菜单（支持文件夹收藏和网址收藏）。"""
@@ -1277,6 +1475,43 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             self._set_editor(None)
         self._update_favorite_button_label()
 
+    def _on_refresh_button_clicked(self) -> None:
+        """底部「刷新」：重扫笔记，并清理硬盘上已删除的外部/IPC 文件条目。"""
+        removed = self._purge_missing_file_entries()
+        self.refresh_notes()
+        if removed:
+            self.status.showMessage(
+                f"已清理 {removed} 个硬盘上已删除的文件条目", 4000
+            )
+        else:
+            self.status.showMessage("列表已刷新", 2000)
+
+    def _purge_missing_file_entries(self) -> int:
+        """移除硬盘上已不存在的外部/IPC 文件条目；返回清理数量。
+
+        列表里的 ✕ 条目（文件被外部删除）在点「刷新」时一并清掉，
+        当前正在查看的文件若被清理则回到空态/最近的笔记。
+        """
+        removed = 0
+        for attr in ("_external_files", "_ipc_files"):
+            entries = list(getattr(self, attr, None) or [])
+            if not entries:
+                continue
+            kept = [p for p in entries if not self._file_missing(p)]
+            if len(kept) != len(entries):
+                gone = [p for p in entries if p not in kept]
+                removed += len(gone)
+                setattr(self, attr, kept)
+                lprint(f"[清理已删除文件] {attr}: {gone}")
+        if not removed:
+            return 0
+        if self._current_external_file and self._current_external_file not in self._external_files:
+            self._current_external_file = None
+        if self._current_ipc_file and self._current_ipc_file not in self._ipc_files:
+            self._current_ipc_file = None
+        self._save_external_files_state()
+        return removed
+
     def _apply_filter(self) -> None:
         # lightweight local filter; refresh keeps the list consistent
         self.refresh_notes()
@@ -1294,10 +1529,21 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         # 只保留第 0 列（名称 + 日期），隐藏其它列
         for col in range(1, tree.columnCount()):
             tree.setColumnHidden(col, True)
-        # 自定义 delegate 实现两行不同颜色
+        # 自定义 delegate 实现两行不同颜色 + 右侧收藏星标
         if getattr(self, "_note_tree_delegate", None) is None:
-            self._note_tree_delegate = _NoteTreeItemDelegate(tree)
+            self._note_tree_delegate = _NoteTreeItemDelegate(tree, self)
         tree.setItemDelegate(self._note_tree_delegate)
+        # 收藏星标需要鼠标悬停反馈：开启 viewport 的鼠标跟踪
+        tree.setMouseTracking(True)
+        tree.viewport().setMouseTracking(True)
+        # 单列拉伸到面板右缘，保证右侧收藏星标贴在列表最右侧（与参考实现一致）
+        header = tree.header()
+        if header is not None:
+            header.setStretchLastSection(True)
+            try:
+                header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
+            except Exception:
+                pass
         # 自定义 ProxyStyle 绘制层级指示线
         if getattr(self, "_note_tree_style", None) is None:
             self._note_tree_style = _NoteTreeProxyStyle(tree.style())
@@ -1372,12 +1618,15 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
                 path = Path(file_path)
                 if query and query.lower() not in path.name.lower():
                     continue
-                item = QtWidgets.QListWidgetItem(f"  ↗ {path.name}\n  {file_path}")
+                mark, missing = self._file_entry_marker(file_path)
+                item = QtWidgets.QListWidgetItem(f"  {mark} {path.name}\n  {file_path}")
                 font = item.font()
                 font.setBold(True)
                 item.setFont(font)
                 item.setData(QtCore.Qt.ItemDataRole.UserRole, f"{EXTERNAL_FILE_PREFIX}{file_path}")
-                item.setToolTip(file_path)
+                item.setToolTip(self._file_entry_tooltip(file_path, missing))
+                if missing:
+                    item.setForeground(QtGui.QBrush(self._missing_entry_color()))
                 item.setSizeHint(QtCore.QSize(0, 44))
                 item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
                 self.notes_list.addItem(item)
@@ -1396,12 +1645,15 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
                 path = Path(file_path)
                 if query and query.lower() not in path.name.lower():
                     continue
-                item = QtWidgets.QListWidgetItem(f"  ↗ {path.name}\n  {file_path}")
+                mark, missing = self._file_entry_marker(file_path)
+                item = QtWidgets.QListWidgetItem(f"  {mark} {path.name}\n  {file_path}")
                 font = item.font()
                 font.setBold(True)
                 item.setFont(font)
                 item.setData(QtCore.Qt.ItemDataRole.UserRole, f"{IPC_FILE_PREFIX}{file_path}")
-                item.setToolTip(file_path)
+                item.setToolTip(self._file_entry_tooltip(file_path, missing))
+                if missing:
+                    item.setForeground(QtGui.QBrush(self._missing_entry_color()))
                 item.setSizeHint(QtCore.QSize(0, 44))
                 item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
                 self.notes_list.addItem(item)
@@ -1412,6 +1664,8 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         tree = self.notes_tree
         if tree is None:
             return
+        # 列表即将重建，先收起悬停浮层，避免残留指向已销毁的 item
+        self._hide_folder_hover_popup()
 
         # ① 清空前先收集所有文件夹的展开状态，合并到持久化字典中
         if not hasattr(self, "_tree_folder_expanded_state"):
@@ -1450,9 +1704,38 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         ask_ai_item.setForeground(0, QtGui.QBrush(QtGui.QColor("#B794F4")))
         ask_ai_item.setBackground(0, QtGui.QBrush(QtGui.QColor("rgba(183, 148, 244, 0.06)")))
         tree.addTopLevelItem(ask_ai_item)
+
+        # 收藏的外部/IPC 文件同样全局置顶：并入「★ 收藏」分组
+        def _file_matches(file_path: str) -> bool:
+            return not query or query.lower() in Path(file_path).name.lower()
+
+        fav_ext = [
+            p
+            for p in self._external_files
+            if self._is_favorite(self._external_key(p)) and _file_matches(p)
+        ]
+        fav_ipc = [
+            p
+            for p in self._ipc_files
+            if self._is_favorite(self._ipc_key(p)) and _file_matches(p)
+        ]
+        if (fav_ext or fav_ipc) and not any(
+            fn == FAVORITES_GROUP_NAME for fn, _ in (grouped_notes or [])
+        ):
+            fav_parent = self._ensure_tree_folder_item(tree, FAVORITES_GROUP_NAME)
+            if fav_parent is not None:
+                self._add_pinned_file_items_tree(fav_parent, fav_ext, fav_ipc)
+
         if grouped_notes:
             for folder_name, folder_items in grouped_notes:
-                if folder_name == "":
+                if folder_name == FAVORITES_GROUP_NAME:
+                    parent = self._ensure_tree_folder_item(tree, FAVORITES_GROUP_NAME)
+                    if parent is None:
+                        parent = tree.invisibleRootItem()
+                    for n in folder_items:
+                        parent.addChild(self._create_note_tree_item(n))
+                    self._add_pinned_file_items_tree(parent, fav_ext, fav_ipc)
+                elif folder_name == "":
                     # 根目录文件放入「未归档」文件夹，不散落在最外层
                     if folder_items:
                         root_parent = self._ensure_tree_folder_item(tree, "未归档")
@@ -1479,11 +1762,17 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             ext_folder.setForeground(0, QtGui.QBrush(QtGui.QColor("#90A4AE")))
             tree.addTopLevelItem(ext_folder)
             for file_path in self._external_files:
+                if self._is_favorite(self._external_key(file_path)):
+                    continue  # 已置顶到「★ 收藏」
                 path = Path(file_path)
                 if query and query.lower() not in path.name.lower():
                     continue
-                item = QtWidgets.QTreeWidgetItem([f"  ↗ {path.name}", f"  {file_path}"])
+                mark, missing = self._file_entry_marker(file_path)
+                item = QtWidgets.QTreeWidgetItem([f"  {mark} {path.name}", f"  {file_path}"])
                 item.setData(0, QtCore.Qt.ItemDataRole.UserRole, f"{EXTERNAL_FILE_PREFIX}{file_path}")
+                item.setToolTip(0, self._file_entry_tooltip(file_path, missing))
+                if missing:
+                    item.setForeground(0, QtGui.QBrush(self._missing_entry_color()))
                 ext_folder.addChild(item)
         if self._ipc_files:
             ipc_folder = QtWidgets.QTreeWidgetItem(["📁 IPC 文件"])
@@ -1494,11 +1783,17 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             ipc_folder.setForeground(0, QtGui.QBrush(QtGui.QColor("#90A4AE")))
             tree.addTopLevelItem(ipc_folder)
             for file_path in self._ipc_files:
+                if self._is_favorite(self._ipc_key(file_path)):
+                    continue  # 已置顶到「★ 收藏」
                 path = Path(file_path)
                 if query and query.lower() not in path.name.lower():
                     continue
-                item = QtWidgets.QTreeWidgetItem([f"  ↗ {path.name}", f"  {file_path}"])
+                mark, missing = self._file_entry_marker(file_path)
+                item = QtWidgets.QTreeWidgetItem([f"  {mark} {path.name}", f"  {file_path}"])
                 item.setData(0, QtCore.Qt.ItemDataRole.UserRole, f"{IPC_FILE_PREFIX}{file_path}")
+                item.setToolTip(0, self._file_entry_tooltip(file_path, missing))
+                if missing:
+                    item.setForeground(0, QtGui.QBrush(self._missing_entry_color()))
                 ipc_folder.addChild(item)
         self._add_server_log_files_to_tree(tree, query=query)
         # ② 按持久化的展开状态恢复（未记录的文件夹默认展开；ASK_AI 默认折叠由外部控制）
@@ -1577,11 +1872,42 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         item = tree.itemAt(pos)
         if item is None:
             return
-        item_id = item.data(0, QtCore.Qt.ItemDataRole.UserRole) or ""
-        if not isinstance(item_id, str) or not item_id.startswith(SERVER_LOG_PREFIX):
+        item_id = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+        if isinstance(item_id, str) and item_id.startswith(SERVER_LOG_PREFIX):
+            log_path = item_id[len(SERVER_LOG_PREFIX):]
+            self._show_log_context_menu(tree.viewport().mapToGlobal(pos), log_path)
             return
-        log_path = item_id[len(SERVER_LOG_PREFIX):]
-        self._show_log_context_menu(tree.viewport().mapToGlobal(pos), log_path)
+        fav_key = _NoteTreeItemDelegate._favorite_key_for_role(item_id)
+        if fav_key is not None:
+            # 笔记 / 外部文件 / IPC 文件：提供收藏/取消收藏（全局置顶）+ 打开文件所在文件夹
+            menu = QtWidgets.QMenu(self)
+            is_fav = self._is_favorite(fav_key)
+            act_fav = menu.addAction("取消收藏" if is_fav else "收藏并置顶")
+            act_fav.triggered.connect(
+                lambda _checked=False, k=fav_key: self._toggle_favorite_key(k)
+            )
+            local_path = self._item_local_file_path(
+                item_id, item.data(0, QtCore.Qt.ItemDataRole.UserRole + 1)
+            )
+            if local_path is not None:
+                menu.addSeparator()
+                act_open_dir = menu.addAction("📂 打开文件所在文件夹")
+                act_open_dir.triggered.connect(
+                    lambda _checked=False, p=local_path: self._open_path_in_explorer(p)
+                )
+                act_copy_path = menu.addAction("📋 复制文件路径")
+                act_copy_path.triggered.connect(
+                    lambda _checked=False, p=local_path: self._copy_text_to_clipboard(
+                        str(p), label="文件路径"
+                    )
+                )
+                act_copy_dir = menu.addAction("📁 复制所在文件夹")
+                act_copy_dir.triggered.connect(
+                    lambda _checked=False, p=local_path: self._copy_text_to_clipboard(
+                        str(p.parent), label="所在文件夹"
+                    )
+                )
+            menu.exec(tree.viewport().mapToGlobal(pos))
 
     def _on_notes_list_context_menu(self, pos: QtCore.QPoint) -> None:
         """notes_list 右键菜单"""
@@ -1592,10 +1918,33 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         if item is None:
             return
         item_id = item.data(QtCore.Qt.ItemDataRole.UserRole) or ""
-        if not isinstance(item_id, str) or not item_id.startswith(SERVER_LOG_PREFIX):
+        if isinstance(item_id, str) and item_id.startswith(SERVER_LOG_PREFIX):
+            log_path = item_id[len(SERVER_LOG_PREFIX):]
+            self._show_log_context_menu(lst.viewport().mapToGlobal(pos), log_path)
             return
-        log_path = item_id[len(SERVER_LOG_PREFIX):]
-        self._show_log_context_menu(lst.viewport().mapToGlobal(pos), log_path)
+        local_path = self._item_local_file_path(
+            item_id, item.data(QtCore.Qt.ItemDataRole.UserRole + 1)
+        )
+        if local_path is None:
+            return
+        menu = QtWidgets.QMenu(self)
+        act_open_dir = menu.addAction("📂 打开文件所在文件夹")
+        act_open_dir.triggered.connect(
+            lambda _checked=False, p=local_path: self._open_path_in_explorer(p)
+        )
+        act_copy_path = menu.addAction("📋 复制文件路径")
+        act_copy_path.triggered.connect(
+            lambda _checked=False, p=local_path: self._copy_text_to_clipboard(
+                str(p), label="文件路径"
+            )
+        )
+        act_copy_dir = menu.addAction("📁 复制所在文件夹")
+        act_copy_dir.triggered.connect(
+            lambda _checked=False, p=local_path: self._copy_text_to_clipboard(
+                str(p.parent), label="所在文件夹"
+            )
+        )
+        menu.exec(lst.viewport().mapToGlobal(pos))
 
     def _show_log_context_menu(self, global_pos: QtCore.QPoint, log_path: str) -> None:
         """显示服务器日志项的右键菜单"""
@@ -1762,12 +2111,13 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
 
     def _create_note_list_item(self, note: NoteDto) -> QtWidgets.QListWidgetItem:
         display_title = self._truncate_filename(Path(note.title).name)
-        title = f"※ {display_title}" if self._is_favorite(note.id) else display_title
-        item = QtWidgets.QListWidgetItem(f"  {title}\n  {note.updated_at}")
+        # 收藏状态改由右侧星标图标表达，不再使用 ※ 前缀
+        item = QtWidgets.QListWidgetItem(f"  {display_title}\n  {note.updated_at}")
         font = item.font()
         font.setBold(True)
         item.setFont(font)
         item.setData(QtCore.Qt.ItemDataRole.UserRole, note.id)
+        item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, note.title)
         item.setToolTip(f"{Path(note.title).name}  #{note.id}  {note.updated_at}")
         item.setSizeHint(QtCore.QSize(0, 40))
         item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
@@ -1775,12 +2125,12 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
 
     def _create_note_tree_item(self, note: NoteDto) -> QtWidgets.QTreeWidgetItem:
         display_title = self._truncate_filename(Path(note.title).name)
-        title = f"※ {display_title}" if self._is_favorite(note.id) else display_title
+        # 收藏状态改由右侧星标图标表达，不再使用 ※ 前缀
         # 日期简短格式：将 ISO 8601 中的 'T' 替换为空格，并只保留分钟
         updated_at = (note.updated_at or "").replace("T", " ").split(":", 2)
         short_date = ":".join(updated_at[:2]) if len(updated_at) >= 2 else (note.updated_at or "")
         # 文件名 + 日期换行显示
-        item = QtWidgets.QTreeWidgetItem([f"{title}\n{short_date}"])
+        item = QtWidgets.QTreeWidgetItem([f"{display_title}\n{short_date}"])
         font = item.font(0)
         font.setBold(True)
         item.setFont(0, font)
@@ -1791,6 +2141,29 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         item.setToolTip(0, f"{Path(note.title).name}  #{note.id}  {note.updated_at}")
         return item
 
+    def _add_pinned_file_items_tree(self, parent, ext_paths, ipc_paths) -> None:
+        """把已收藏的外部/IPC 文件项加入「★ 收藏」分组（全局置顶）。"""
+        for file_path in ext_paths:
+            mark, missing = self._file_entry_marker(file_path)
+            item = QtWidgets.QTreeWidgetItem(
+                [f"  {mark} {Path(file_path).name}", f"  {file_path}"]
+            )
+            item.setToolTip(0, self._file_entry_tooltip(file_path, missing))
+            if missing:
+                item.setForeground(0, QtGui.QBrush(self._missing_entry_color()))
+            item.setData(0, QtCore.Qt.ItemDataRole.UserRole, self._external_key(file_path))
+            parent.addChild(item)
+        for file_path in ipc_paths:
+            mark, missing = self._file_entry_marker(file_path)
+            item = QtWidgets.QTreeWidgetItem(
+                [f"  {mark} {Path(file_path).name}", f"  {file_path}"]
+            )
+            item.setToolTip(0, self._file_entry_tooltip(file_path, missing))
+            if missing:
+                item.setForeground(0, QtGui.QBrush(self._missing_entry_color()))
+            item.setData(0, QtCore.Qt.ItemDataRole.UserRole, self._ipc_key(file_path))
+            parent.addChild(item)
+
     def _group_notes_by_folder(
         self,
         notes: list[NoteDto],
@@ -1798,17 +2171,29 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         query: str = "",
     ) -> list[tuple[str, list[NoteDto]]]:
         grouped: dict[str, list[NoteDto]] = {}
+        favorites: list[NoteDto] = []
+        fav_rank = {
+            nid: i for i, nid in enumerate(self._favorite_order) if isinstance(nid, int)
+        }
         for note in notes:
             if note.title.startswith("问AI"):
                 continue
             if query and query.lower() not in note.title.lower():
                 continue
+            if self._is_favorite(note.id):
+                favorites.append(note)
+                continue
             folder_name = self._note_folder_name(note.title)
             grouped.setdefault(folder_name, []).append(note)
-        return sorted(
+        # 收藏项全局置顶：单独成组放在最前，组内按收藏先后（最近收藏在前）
+        favorites.sort(key=lambda n: fav_rank.get(int(n.id), 1 << 30))
+        groups = sorted(
             grouped.items(),
             key=lambda kv: (kv[0] == "", kv[0].lower()),
         )
+        if favorites:
+            groups.insert(0, (FAVORITES_GROUP_NAME, favorites))
+        return groups
 
     @staticmethod
     def _note_folder_name(title: str) -> str:
@@ -1822,7 +2207,10 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         if self._notes_tree_mode and self.notes_tree is not None:
             item = self._find_tree_item_by_note_id(note_id)
             if item is not None:
+                # 选中前先展开其所在文件夹（含多级父目录），否则折叠状态下看不到选中项
+                self._expand_tree_ancestors(item)
                 self.notes_tree.setCurrentItem(item)
+                self.notes_tree.scrollToItem(item)
                 return True
             return False
         for i in range(self.notes_list.count()):
@@ -2155,19 +2543,26 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             return
         title = self.title_edit.text().strip() or "未命名"
         content = self._get_content_text()
+        old_note_id = self.state.current_note_id
         try:
-            if self.state.current_note_id is None:
+            if old_note_id is None:
                 note = self.api.create_note(title=title, content=content)
-                self.state.current_note_id = note.id
             else:
-                note = self.api.update_note(self.state.current_note_id, title=title, content=content)
+                note = self.api.update_note(old_note_id, title=title, content=content)
         except ApiError as e:
             self._show_error(str(e))
             return
 
+        # 改名/移动会改变本地笔记 id（crc32(相对路径)），需把旧 id 的版本历史迁移到新 id，
+        # 否则改一次名字就再也看不到之前保存的历史版本。
+        if old_note_id is not None and int(old_note_id) != int(note.id):
+            history_store.migrate_versions("note", str(old_note_id), str(note.id))
+        self.state.current_note_id = note.id
         self.state.dirty = False
         self.status.showMessage(f"已保存：#{note.id}", 2500)
         self._record_version("note", str(note.id), note.title, content)
+        # 记录保存后的快照：本程序自己的写入不应触发「磁盘被外部修改」提示
+        self._record_loaded_local_file(self._note_file_path(note.title))
         self.refresh_notes()
         self._update_title()
 
@@ -2176,10 +2571,13 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
     def _current_version_context(self) -> tuple[str | None, str | None, str]:
         """返回当前编辑内容的版本上下文 (kind, ref, title)。
 
-        仅「普通笔记」与「服务器日志」支持版本历史，其余返回 (None, None, "")。
+        「普通笔记」「服务器日志」「本地/外部文件」均支持版本历史，其余返回 (None, None, "")。
         """
-        if self._ask_ai_mode or self._current_external_file:
+        if self._ask_ai_mode:
             return None, None, ""
+        if self._current_external_file:
+            # 外部文件（含 IPC 推入的本地文件）以绝对路径作为稳定 ref
+            return "external", self._current_external_file, Path(self._current_external_file).name
         if self._current_server_log_path:
             log_path = self._current_server_log_path
             return "log", log_path, PurePosixPath(log_path).name
@@ -2434,8 +2832,9 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             return
         title = self.title_edit.text().strip() or "未命名"
         content = self._get_content_text()
+        old_note_id = self.state.current_note_id
         try:
-            note = self.api.update_note(self.state.current_note_id, title=title, content=content)
+            note = self.api.update_note(old_note_id, title=title, content=content)
         except ApiError as e:
             if detail_ui or notify_tray:
                 self._report_autosave(
@@ -2451,6 +2850,13 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
                 lprint(f"{reason} 自动保存失败：{e}")
             return
 
+        # 自动保存同样要记录版本历史，否则只有在手动 Ctrl+S 时才能留下历史；
+        # 改名/移动导致 id 变化时，先把旧 id 的历史迁移到新 id。
+        if int(old_note_id) != int(note.id):
+            history_store.migrate_versions("note", str(old_note_id), str(note.id))
+        self._record_version("note", str(note.id), note.title, content)
+        # 记录保存后的快照：本程序自己的写入不应触发「磁盘被外部修改」提示
+        self._record_loaded_local_file(self._note_file_path(note.title))
         self.state.current_note_id = note.id
         self._last_open_note_id = note.id
         self.state.dirty = False
@@ -2684,7 +3090,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self.btn_new.clicked.connect(self._new_note)
         self.btn_save.clicked.connect(self._save_note)
         self.btn_delete.clicked.connect(self._delete_note)
-        self.btn_refresh.clicked.connect(self.refresh_notes)
+        self.btn_refresh.clicked.connect(self._on_refresh_button_clicked)
         self.btn_favorite.clicked.connect(self._toggle_favorite_current)
         self.btn_ai_ask.clicked.connect(self._ask_ai)
         self.combo_version.aboutToShowPopup.connect(self._populate_version_combo)
@@ -2855,14 +3261,19 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self.btn_ai_ask.setEnabled(False)
         self.btn_save.setEnabled(True)
         self.btn_delete.setEnabled(True)
-        self.btn_favorite.setEnabled(False)
+        self.btn_favorite.setEnabled(True)
         self._auto_set_highlight_mode(path.name)
         self.state.dirty = False
+        self._record_loaded_local_file(path)
+        # 打开时先落一份基线版本（内容与上一版本相同会被 add_version 去重），
+        # 这样首次编辑后的原内容仍可回退，而不会只剩编辑后的新内容。
+        self._record_version("external", self._current_external_file, path.name, content)
         self._save_external_files_state()
         self._update_title()
         self._log_file_path_label.setText(f"日志路径: {path}")
         self._log_file_path_label.setToolTip(str(path))
         self._sync_version_combo_on_open()
+        self._update_favorite_button_label()
 
     # ===== 服务器日志文件浏览（通过 API 获取） =====
 
@@ -3174,6 +3585,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self._current_external_file = None
         self._current_server_log_path = log_path
         self.state.current_note_id = None
+        self._clear_loaded_local_file()
         content = self._get_log_content_cached(log_path)
         if content is None:
             return
@@ -3405,6 +3817,8 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             return
         self.state.dirty = False
         self._save_external_files_state()
+        self._record_loaded_local_file(path)
+        self._record_version("external", self._current_external_file, filename, content)
         self._update_title()
         size_bytes, saved_at = self._stat_from_path_or_fallback(path)
         if reason and (detail_ui or notify_tray):
@@ -3427,6 +3841,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             self._auto_save_note("重启前")
             self._allow_close = True
             self._save_settings()
+            self._save_top_window_state()
             if self._restart_callback is not None:
                 self._restart_callback()
             else:
@@ -3437,33 +3852,72 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             self._allow_close = False
             self._show_error(f"重启失败: {exc}")
 
+    def _save_top_window_state(self) -> None:
+        """保存最顶层窗口（无边框外壳）的几何状态，供下次启动/重启恢复。
+
+        无边框模式下本内容是嵌入到 L_FramelessMainWindow 外壳里的子部件，
+        自身 saveGeometry() 只是子部件尺寸；只有外壳的 saveWindowState() 才会
+        写入真正的窗口位置与大小。若直接 QApplication.quit()/close() 退出，
+        外壳的 closeEvent 可能不会触发，需要在这里主动保存一次。
+        """
+        try:
+            top = self.window()
+        except Exception:
+            return
+        if top is None or top is self:
+            return
+        saver = getattr(top, "saveWindowState", None)
+        if callable(saver):
+            try:
+                saver()
+                # 立即落盘：紧接着就会 startDetached 启动新进程，新进程要靠它恢复几何
+                top_settings = getattr(top, "_settings", None)
+                if top_settings is not None:
+                    top_settings.sync()
+            except Exception as exc:
+                lprint(f"保存顶层窗口状态失败: {exc}")
+
     def _toggle_favorite_current(self) -> None:
-        lprint(
-            f"点击置顶/收藏: ask_ai_mode={self._ask_ai_mode}, current_note_id={self.state.current_note_id}, "
-            f"current_external={self._current_external_file!r}"
-        )
         if self._ask_ai_mode:
             lprint("当前处于 AI 模式，忽略置顶/收藏切换")
             return
-        if self.state.current_note_id is None:
-            lprint("当前没有可置顶的笔记，忽略")
+        key = self._current_favorite_key()
+        if key is None:
+            lprint("当前没有可置顶的内容，忽略")
             return
-        note_id = int(self.state.current_note_id)
+        self._toggle_favorite_key(key)
+
+    def _toggle_favorite_by_id(self, note_id: int) -> None:
+        """切换指定笔记的收藏（收藏项全局置顶）。"""
+        try:
+            self._toggle_favorite_key(int(note_id))
+        except (TypeError, ValueError):
+            return
+
+    def _toggle_favorite_key(self, key) -> None:
+        """切换指定内容（笔记 int / 外部与 IPC 文件 str）的收藏并全局置顶。"""
+        if key is None:
+            return
         before = list(self._favorite_order)
-        if note_id in self._favorite_order:
-            self._favorite_order = [x for x in self._favorite_order if x != note_id]
-            self.status.showMessage("已取消置顶/收藏", 2000)
-            action = "取消"
+        if key in self._favorite_order:
+            self._favorite_order = [x for x in self._favorite_order if x != key]
+            msg = "已取消收藏"
         else:
-            self._favorite_order.insert(0, note_id)
-            self.status.showMessage("已置顶/收藏", 2000)
-            action = "置顶"
-        lprint(f"置顶/收藏操作: note_id={note_id}, action={action}, before={before}, after={self._favorite_order}")
+            self._favorite_order = [x for x in self._favorite_order if x != key]
+            self._favorite_order.insert(0, key)
+            msg = "已收藏并置顶"
         self._save_settings()
         self.refresh_notes()
-        self._select_note_id(note_id)
+        # 保持当前编辑内容被选中（笔记 / 外部 / IPC）
+        if self._current_ipc_file:
+            self._select_ipc_file(self._current_ipc_file)
+        elif self._current_external_file:
+            self._select_external_file(self._current_external_file)
+        elif self.state.current_note_id is not None:
+            self._select_note_id(int(self.state.current_note_id))
         self._update_favorite_button_label()
-        lprint(f"置顶/收藏完成: button_text={self.btn_favorite.text()!r}")
+        self.status.showMessage(msg, 2000)
+        lprint(f"收藏切换: key={key!r}, before={before}, after={self._favorite_order}")
 
     def _on_notes_rows_moved(self, *_args) -> None:
         if self._notes_tree_mode:
@@ -4268,6 +4722,10 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self._set_right_panel_mode("empty" if note is None else "note")
         self._remember_right_widget("title_edit", title_edit_widget)
         self._remember_right_widget("content_edit", content_edit_widget)
+        if note is not None:
+            self._record_loaded_local_file(self._note_file_path(note.title))
+        else:
+            self._clear_loaded_local_file()
         self._verify_right_note_content(note, expected_content)
         self.state.dirty = False
         self._update_title()
@@ -4335,6 +4793,223 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
     def on_tray_message_log(self, message: str) -> None:
         lprint(message)
 
+    # ===== 本地文件（笔记 / 外部文件）外部修改检测 =====
+
+    def _current_local_file_path(self) -> Path | None:
+        """返回当前编辑区对应的磁盘文件路径（笔记 / 外部 / IPC 文件）。
+
+        服务器日志、问AI 会话等非本地文件返回 None。
+        """
+        if self._ask_ai_mode or self._current_server_log_path:
+            return None
+        for raw in (self._current_external_file, self._current_ipc_file):
+            if raw:
+                return Path(raw)
+        if self.state.current_note_id is not None:
+            title = (
+                self.title_edit.text().strip()
+                if self._qt_is_valid(getattr(self, "title_edit", None))
+                else ""
+            )
+            if title:
+                return self._note_file_path(title)
+        return None
+
+    def _clear_loaded_local_file(self) -> None:
+        self._loaded_local_file_path = None
+        self._loaded_local_file_mtime = None
+        self._loaded_local_file_size = None
+        self._refresh_local_file_watch()
+
+    @staticmethod
+    def _local_file_state(path: Path) -> tuple[float, int] | None:
+        """返回 (mtime, size)；文件不存在/不可访问返回 None。"""
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime, st.st_size)
+
+    def _record_loaded_local_file(self, path: Path | None = None) -> None:
+        """记录当前本地文件的加载/保存快照（路径 + mtime + 大小），并重挂监视。"""
+        target = path if path is not None else self._current_local_file_path()
+        if target is None:
+            self._clear_loaded_local_file()
+            return
+        state = self._local_file_state(target)
+        self._loaded_local_file_path = str(target)
+        self._loaded_local_file_mtime = state[0] if state else None
+        self._loaded_local_file_size = state[1] if state else None
+        self._refresh_local_file_watch()
+        lprint(
+            f"[本地文件监控] 记录快照 path={target} "
+            f"mtime={self._loaded_local_file_mtime} size={self._loaded_local_file_size}"
+        )
+
+    def _refresh_local_file_watch(self) -> None:
+        """让文件监视/轮询对齐当前本地文件（含父目录，兼容原子替换写盘）。"""
+        watcher = getattr(self, "_local_file_watcher", None)
+        timer = getattr(self, "_local_file_poll_timer", None)
+        if watcher is None or timer is None:
+            return
+        existing = list(watcher.files()) + list(watcher.directories())
+        if existing:
+            watcher.removePaths(existing)
+        target = self._current_local_file_path()
+        if target is None:
+            timer.stop()
+            return
+        watcher.addPath(str(target))
+        if target.parent.exists():
+            watcher.addPath(str(target.parent))
+        timer.start()
+        self._ensure_top_window_activation_filter()
+
+    def _ensure_top_window_activation_filter(self) -> None:
+        """在顶层窗口上挂钩激活事件。
+
+        本窗口是无边框外壳（L_FramelessMainWindow）里的内容子控件，
+        Qt 的 WindowActivate/ActivationChange 只发给顶层窗口，子控件收不到，
+        因此必须在 ``self.window()`` 上过滤，否则「切回程序即检查」永不触发。
+        """
+        if getattr(self, "_top_window_activation_filter", False):
+            return
+        top = self.window()
+        if top is None or top is self:
+            return
+        top.installEventFilter(self)
+        self._top_window_activation_filter = True
+
+    def _on_local_file_watch_event(self, _path: str) -> None:
+        """QFileSystemWatcher 回调：文件或其目录变化 → 复核快照。"""
+        self._check_local_file_changed(source="文件监视")
+
+    def _poll_local_file_changed(self) -> None:
+        """轮询兜底：监视失效（原子替换写盘等）时仍能发现外部修改。"""
+        self._check_local_file_changed(source="轮询")
+
+    def _check_local_file_updated_on_foreground(self) -> None:
+        """回到前台时，若当前本地文件被外部修改则提示是否重载。"""
+        self._check_local_file_changed(source="窗口激活", force=True)
+
+    def _check_local_file_changed(self, *, source: str = "", force: bool = False) -> None:
+        """比对当前本地文件的快照与磁盘状态，发现外部修改则提示重载。
+
+        非强制入口（文件监视/轮询）只在窗口可见且处于活动状态时提示，
+        避免在后台弹出模态框打断其它程序；窗口激活时强制检查一次。
+        """
+        if getattr(self, "_local_file_reload_prompting", False):
+            return
+        if not force and not (self.isVisible() and self.isActiveWindow()):
+            return
+        target = self._current_local_file_path()
+        if target is None:
+            return
+        if str(target) != self._loaded_local_file_path:
+            # 切换了文件：重新记录快照，不提示
+            self._record_loaded_local_file(target)
+            return
+        state = self._local_file_state(target)
+        if state is None:
+            if self._loaded_local_file_mtime is not None:
+                self._loaded_local_file_mtime = None
+                self._loaded_local_file_size = None
+                self.status.showMessage(f"文件已不存在：{target.name}", 4000)
+                lprint(f"[本地文件监控] 文件已不存在 path={target}")
+                # 列表条目立刻标 ✕（点底部「刷新」可清理该条目）
+                self.refresh_notes()
+            return
+        mtime, size = state
+        last_mtime = self._loaded_local_file_mtime
+        last_size = self._loaded_local_file_size
+        if last_mtime is None:
+            self._record_loaded_local_file(target)
+            return
+        if mtime <= last_mtime and (last_size is None or size == last_size):
+            return
+        name = target.name
+        dirty = bool(getattr(self.state, "dirty", False))
+        lprint(
+            f"[本地文件监控] 检测到外部修改 source={source} path={target} "
+            f"mtime={last_mtime}->{mtime} size={last_size}->{size} dirty={dirty}"
+        )
+        if dirty:
+            text = (
+                f"文件『{name}』已在磁盘上被外部修改。\n"
+                f"重载会丢弃你当前未保存的修改，是否重载？"
+            )
+        else:
+            text = f"文件『{name}』已在磁盘上被外部修改，是否重载？\n{target}"
+        self._local_file_reload_prompting = True
+        try:
+            ret = QtWidgets.QMessageBox.question(
+                self,
+                "文件已更新",
+                text,
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.Yes,
+            )
+        finally:
+            self._local_file_reload_prompting = False
+        lprint(f"[本地文件监控] 提示结果 source={source} ret={int(ret)}")
+        if ret != QtWidgets.QMessageBox.StandardButton.Yes:
+            # 用户保留当前内容：刷新快照，避免反复提示
+            self._record_loaded_local_file(target)
+            self.status.showMessage(f"已保留当前内容：{name}", 2500)
+            return
+        self._reload_local_file_from_disk(target)
+
+    def _reload_local_file_from_disk(self, path: Path) -> None:
+        """把本地文件（笔记 / 外部文件）重新读入编辑器。"""
+        if not self._qt_is_valid(getattr(self, "content_edit", None)):
+            return
+        try:
+            is_file = path.is_file()
+        except OSError:
+            is_file = False
+        if not is_file:
+            self.status.showMessage(f"文件不存在：{path.name}", 4000)
+            return
+        editor = self.content_edit
+        mode = self._mode_from_filename(path.name)
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:
+            lprint(f"读取本地文件失败：{path} ({exc})")
+            self.status.showMessage(f"读取本地文件失败：{exc}", 5000)
+            return
+        try:
+            loaded = editor.load_text_file_cached(path, mode=mode)
+        except Exception as exc:
+            lprint(f"重载本地文件失败：{path} ({exc})")
+            loaded = False
+        # 预览层持有自己的源码副本，file_cached 命中缓存等情况可能不刷新可见层：
+        # 用「可见文本 == 磁盘内容」做校验，不一致就强制刷一次，保证看到的是磁盘内容。
+        if not loaded or editor.toPlainText() != text:
+            lprint(f"[本地文件监控] 强制刷新编辑区 loaded={loaded}")
+            try:
+                if editor.is_markdown_preview_mode():
+                    editor.show_markdown_preview(text)
+                else:
+                    editor.setPlainText(text)
+            except Exception as exc:
+                lprint(f"刷新编辑区失败：{exc}")
+                self.status.showMessage(f"刷新编辑区失败：{exc}", 5000)
+                return
+        self.state.dirty = False
+        self._invalidate_log_content_cache(str(path))
+        self._record_loaded_local_file(path)
+        self._set_code_editor_status_file(path)
+        try:
+            size_bytes = path.stat().st_size
+        except OSError:
+            size_bytes = None
+        self._set_code_editor_status_text(str(path), size_bytes)
+        self._update_title()
+        self._sync_version_combo_on_open()
+        self.status.showMessage(f"已重载本地文件：{path.name}", 2500)
+
     def changeEvent(self, event) -> None:  # type: ignore[override]
         if event.type() == QtCore.QEvent.Type.WindowStateChange:
             if isinstance(event, QtGui.QWindowStateChangeEvent):
@@ -4344,7 +5019,10 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
                 ):
                     self._auto_save_note("窗口最小化", notify_tray=True)
         elif event.type() == QtCore.QEvent.Type.WindowDeactivate:
+            self._hide_folder_hover_popup()
             QtCore.QTimer.singleShot(0, self._auto_save_on_deactivate)
+        elif event.type() == QtCore.QEvent.Type.WindowActivate:
+            QtCore.QTimer.singleShot(0, self._check_local_file_updated_on_foreground)
         super().changeEvent(event)
 
     def _auto_save_on_deactivate(self) -> None:
@@ -4353,11 +5031,57 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self._auto_save_note("窗口失去焦点", detail_ui=True)
 
     def eventFilter(self, watched, event) -> bool:  # type: ignore[override]
+        # 顶层窗口（无边框外壳）的激活事件：本控件是外壳的内容子控件，收不到
+        # WindowActivate，必须在外壳上过滤才能做到「切回程序即检查本地文件」。
+        # 外壳的其它事件与下面的逻辑无关，直接放行。
+        top = self.window()
+        if top is not None and top is not self and watched is top:
+            if event.type() in (
+                QtCore.QEvent.Type.WindowActivate,
+                QtCore.QEvent.Type.ActivationChange,
+            ):
+                QtCore.QTimer.singleShot(
+                    0, self._check_local_file_updated_on_foreground
+                )
+            return False
+        # 外部文件拖入：笔记树/列表均可接收资源管理器拖来的文件，归类「外部文件」分组
+        drop_view = self._notes_drop_viewport()
+        if (
+            drop_view is not None
+            and watched is drop_view
+            and event.type()
+            in (
+                QtCore.QEvent.Type.DragEnter,
+                QtCore.QEvent.Type.DragMove,
+                QtCore.QEvent.Type.DragLeave,
+                QtCore.QEvent.Type.Drop,
+            )
+        ):
+            if self._handle_external_file_drop(event):
+                return True
         # 中键拖拽调序（拖影 + 落点线）：仅在 notes_tree 的 viewport 上生效
         tree = getattr(self, "notes_tree", None)
         if tree is not None and watched is tree.viewport():
             if self._handle_tree_mid_drag(tree, event):
                 return True
+            # 右侧收藏星标：悬停反馈 + 左键点击切换
+            if self._handle_tree_star_event(tree, event):
+                return True
+            # 折叠文件夹悬停：窗口左侧弹出内部笔记文件列表
+            self._handle_folder_hover_event(tree, event)
+        # 折叠文件夹浮层：进入则保持展开，离开则延迟收起
+        popup = getattr(self, "_folder_hover_popup", None)
+        popup_list = getattr(self, "_folder_hover_popup_list", None)
+        watched_popup = popup is not None and (
+            watched is popup
+            or watched is popup_list
+            or (popup_list is not None and watched is popup_list.viewport())
+        )
+        if watched_popup:
+            if event.type() == QtCore.QEvent.Type.Enter:
+                self._cancel_hide_folder_hover_popup()
+            elif event.type() == QtCore.QEvent.Type.Leave:
+                self._schedule_hide_folder_hover_popup()
         # CodeEditorWidget 已代理所有常用方法，直接使用
         text_targets = {
             self.content_edit,
@@ -4629,6 +5353,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             top.resize(self._normal_width, top.height())
             lprint(f"恢复正常宽度: {self._normal_width}px")
         self._bring_to_front()
+        QtCore.QTimer.singleShot(0, self._check_local_file_updated_on_foreground)
 
     @QtCore.Slot(int)
     def show_folder_favorites_from_hotkey(self, caller_hwnd: int = 0) -> None:
@@ -4821,7 +5546,426 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self.refresh_notes()
         self.status.showMessage("已调整排序", 1500)
 
+    # ── 右侧收藏星标（参考 l_pyside6_uv 的 FavListWidget 鼠标逻辑）──────
+    @staticmethod
+    def _star_hotzone(tree, pos):
+        """返回 (落点 item, 收藏 key, 是否落在右侧星标热区)。
+
+        收藏 key：笔记为 int(id)，外部/IPC 文件为带前缀的路径字符串，其它为 None。
+        """
+        item = tree.itemAt(pos)
+        if item is None:
+            return None, None, False
+        key = _NoteTreeItemDelegate._favorite_key_for_role(
+            item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+        )
+        if key is None:
+            return item, None, False
+        rect = tree.visualItemRect(item)
+        star = pos.x() >= rect.right() - _NoteTreeItemDelegate.STAR_HOTZONE
+        return item, key, star
+
+    def _update_tree_star_hover(self, tree, pos) -> None:
+        _item, hover_key, star = self._star_hotzone(tree, pos)
+        if hover_key != getattr(tree, "_fav_hover_key", None) or star != getattr(
+            tree, "_fav_hover_star", False
+        ):
+            tree._fav_hover_key = hover_key
+            tree._fav_hover_star = star
+            tree.viewport().update()
+
+    def _handle_tree_star_event(self, tree, event) -> bool:
+        et = event.type()
+        if et == QtCore.QEvent.Type.MouseMove:
+            self._update_tree_star_hover(tree, event.position().toPoint())
+            return False
+        if et == QtCore.QEvent.Type.Leave:
+            if getattr(tree, "_fav_hover_key", None) is not None or getattr(
+                tree, "_fav_hover_star", False
+            ):
+                tree._fav_hover_key = None
+                tree._fav_hover_star = False
+                tree.viewport().update()
+            return False
+        if (
+            et == QtCore.QEvent.Type.MouseButtonPress
+            and event.button() == QtCore.Qt.MouseButton.LeftButton
+        ):
+            _item, key, star = self._star_hotzone(tree, event.position().toPoint())
+            if key is not None and star:
+                self._toggle_favorite_key(key)
+                return True
+        return False
+
+    # ── 折叠文件夹悬停浮层：在窗口外左侧列出内部笔记文件 ──────────────
+    def _folder_hover_popup_widgets(self):
+        popup = getattr(self, "_folder_hover_popup", None)
+        if popup is not None:
+            return popup, self._folder_hover_popup_title, self._folder_hover_popup_list
+        # 以顶层窗口为 owner，确保最大化时浮层仍位于主窗口之上且不被裁剪
+        owner = self.window()
+        popup = QtWidgets.QFrame(
+            owner,
+            QtCore.Qt.WindowType.Tool
+            | QtCore.Qt.WindowType.FramelessWindowHint
+            | QtCore.Qt.WindowType.WindowStaysOnTopHint
+            | QtCore.Qt.WindowType.WindowDoesNotAcceptFocus,
+        )
+        popup.setObjectName("folderHoverPopup")
+        popup.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        popup.setMouseTracking(True)
+        popup.setStyleSheet(
+            "QFrame#folderHoverPopup { background:#252526; border:1px solid #555;"
+            " border-radius:6px; }"
+            "QLabel#folderHoverPopupTitle { color:#89DDFF; font-weight:bold; }"
+            "QListWidget#folderHoverPopupList { background:transparent; color:#E9EEF5;"
+            " border:none; outline:none; }"
+            "QListWidget#folderHoverPopupList::item { height:22px; padding:2px 6px; }"
+            "QListWidget#folderHoverPopupList::item:hover { background:#3A3D41; }"
+            "QListWidget#folderHoverPopupList::item:selected { background:#094771; }"
+        )
+        layout = QtWidgets.QVBoxLayout(popup)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
+        title = QtWidgets.QLabel("")
+        title.setObjectName("folderHoverPopupTitle")
+        layout.addWidget(title)
+        listw = QtWidgets.QListWidget()
+        listw.setObjectName("folderHoverPopupList")
+        listw.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        listw.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        listw.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+        listw.setMouseTracking(True)
+        listw.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        listw.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        listw.setUniformItemSizes(True)
+        listw.itemClicked.connect(self._on_folder_popup_item_clicked)
+        listw.itemActivated.connect(self._on_folder_popup_item_clicked)
+        layout.addWidget(listw)
+        popup.installEventFilter(self)
+        listw.installEventFilter(self)
+        listw.viewport().installEventFilter(self)
+        popup.hide()
+        self._folder_hover_popup = popup
+        self._folder_hover_popup_title = title
+        self._folder_hover_popup_list = listw
+        return popup, title, listw
+
+    @staticmethod
+    def _collect_folder_entries(item) -> list[tuple[str, str, tuple]]:
+        """展平收集文件夹内的条目：[(显示名, 相对路径提示, 打开 key)]。
+
+        key 形如 ("note", id) / ("external", path) / ("ipc", path)。
+        子文件夹不单独成行，直接递归展平其中的笔记，避免层级嵌套。
+        """
+        entries: list[tuple[str, str, tuple]] = []
+
+        def _walk(node, prefix: str) -> None:
+            for i in range(node.childCount()):
+                child = node.child(i)
+                role = child.data(0, QtCore.Qt.ItemDataRole.UserRole)
+                if isinstance(role, int) and not isinstance(role, bool):
+                    title = str(child.data(0, QtCore.Qt.ItemDataRole.UserRole + 1) or "")
+                    name = Path(title).name or title
+                    entries.append((name, f"{prefix}{name}", ("note", int(role))))
+                elif isinstance(role, str) and role.startswith(EXTERNAL_FILE_PREFIX):
+                    p = role[len(EXTERNAL_FILE_PREFIX):]
+                    mark, _missing = self._file_entry_marker(p)
+                    entries.append((f"{mark} {Path(p).name}", p, ("external", p)))
+                elif isinstance(role, str) and role.startswith(IPC_FILE_PREFIX):
+                    p = role[len(IPC_FILE_PREFIX):]
+                    mark, _missing = self._file_entry_marker(p)
+                    entries.append((f"{mark} {Path(p).name}", p, ("ipc", p)))
+                elif isinstance(role, str) and role.startswith("__folder__:"):
+                    sub = str(child.data(0, QtCore.Qt.ItemDataRole.UserRole + 1) or "")
+                    _walk(child, f"{prefix}{sub}/")
+
+        _walk(item, "")
+        return entries
+
+    def _folder_popup_hide_timer(self) -> QtCore.QTimer:
+        timer = getattr(self, "_folder_popup_hide_timer_obj", None)
+        if timer is None:
+            timer = QtCore.QTimer(self)
+            timer.setSingleShot(True)
+            # 从文件夹移动到弹窗需要一点时间，给一个短暂宽限期再收起
+            timer.setInterval(320)
+            timer.timeout.connect(self._hide_folder_hover_popup)
+            self._folder_popup_hide_timer_obj = timer
+        return timer
+
+    def _schedule_hide_folder_hover_popup(self) -> None:
+        self._folder_popup_hide_timer().start()
+
+    def _cancel_hide_folder_hover_popup(self) -> None:
+        timer = getattr(self, "_folder_popup_hide_timer_obj", None)
+        if timer is not None:
+            timer.stop()
+
+    def _handle_folder_hover_event(self, tree, event) -> None:
+        et = event.type()
+        if et == QtCore.QEvent.Type.MouseMove:
+            self._update_folder_hover_popup(tree, event.position().toPoint())
+            return
+        if et == QtCore.QEvent.Type.Leave:
+            # 离开树可能是移向弹窗，延迟收起，交由弹窗 Enter 取消
+            if getattr(self, "_folder_hover_item", None) is not None:
+                self._schedule_hide_folder_hover_popup()
+            return
+        if et in (
+            QtCore.QEvent.Type.Wheel,
+            QtCore.QEvent.Type.MouseButtonPress,
+            QtCore.QEvent.Type.MouseButtonDblClick,
+            QtCore.QEvent.Type.Resize,
+        ):
+            self._hide_folder_hover_popup()
+
+    def _update_folder_hover_popup(self, tree, pos) -> None:
+        item = tree.itemAt(pos)
+        role = item.data(0, QtCore.Qt.ItemDataRole.UserRole) if item is not None else None
+        is_collapsed_folder = (
+            item is not None
+            and isinstance(role, str)
+            and role.startswith("__folder__:")
+            and not item.isExpanded()
+        )
+        if not is_collapsed_folder:
+            self._hide_folder_hover_popup()
+            return
+        if getattr(self, "_folder_hover_item", None) is item and getattr(
+            self, "_folder_hover_popup", None
+        ) is not None and self._folder_hover_popup.isVisible():
+            self._cancel_hide_folder_hover_popup()
+            return
+        self._show_folder_hover_popup(tree, item)
+
+    def _show_folder_hover_popup(self, tree, item) -> None:
+        entries = self._collect_folder_entries(item)
+        if not entries:
+            self._hide_folder_hover_popup()
+            return
+        popup, title, listw = self._folder_hover_popup_widgets()
+        folder_name = item.data(0, QtCore.Qt.ItemDataRole.UserRole + 1) or ""
+        title.setText(f"📁 {folder_name}  ({len(entries)})")
+        listw.clear()
+        for text, tooltip, key in entries:
+            li = QtWidgets.QListWidgetItem(text)
+            li.setToolTip(tooltip)
+            li.setData(QtCore.Qt.ItemDataRole.UserRole, key)
+            listw.addItem(li)
+        # 尺寸：宽度按内容自适应（限幅），高度按条数（限幅）
+        row_h = 22
+        listw.setFixedHeight(min(360, max(row_h, len(entries) * row_h + 4)))
+        width = min(320, max(160, listw.sizeHintForColumn(0) + 28))
+        listw.setFixedWidth(width)
+        popup.adjustSize()
+
+        # 参考剪贴板弹窗：在光标旁摆放（左下→右下→左上→右上，屏内 clamp）
+        cursor_pos = QtGui.QCursor.pos()
+        x, y = self._compute_folder_popup_position(
+            popup.width(), popup.height(), cursor_pos
+        )
+        popup.move(int(x), int(y))
+        popup.show()
+        # 最大化/置顶窗口场景下确保浮层在最上层可见
+        try:
+            popup.raise_()
+        except Exception:
+            pass
+        self._folder_hover_item = item
+        self._cancel_hide_folder_hover_popup()
+
+    def _on_folder_popup_item_clicked(self, li: QtWidgets.QListWidgetItem) -> None:
+        """点击浮层条目：在主界面打开对应笔记/文件，并收起浮层。"""
+        data = li.data(QtCore.Qt.ItemDataRole.UserRole)
+        self._hide_folder_hover_popup()
+        if not (isinstance(data, tuple) and len(data) == 2):
+            return
+        kind, value = data
+        # 弹窗不抢焦点，点击后把主窗口提到前台再选中
+        top = self.window()
+        if top is not None:
+            try:
+                top.raise_()
+                top.activateWindow()
+            except Exception:
+                pass
+        if kind == "note":
+            self._expand_tree_ancestors(self._find_tree_item_by_note_id(int(value)))
+            self._select_note_id(int(value))
+        elif kind == "external":
+            self._select_external_file(str(value))
+        elif kind == "ipc":
+            self._select_ipc_file(str(value))
+
+    def _expand_tree_ancestors(self, item) -> None:
+        """展开 item 的所有祖先文件夹，并同步持久化展开状态。
+
+        同步持久化很重要：选中笔记时可能触发自动保存→refresh_notes 异步重建树，
+        重建会按持久化状态恢复展开，若不写入 True 就会又变回折叠。
+        """
+        if item is None or self.notes_tree is None:
+            return
+        if not hasattr(self, "_tree_folder_expanded_state"):
+            self._tree_folder_expanded_state = {}
+        parent = item.parent()
+        while parent is not None:
+            parent.setExpanded(True)
+            role = parent.data(0, QtCore.Qt.ItemDataRole.UserRole)
+            if isinstance(role, str) and role.startswith("__folder__:"):
+                self._tree_folder_expanded_state[role] = True
+            parent = parent.parent()
+
+    # 与剪贴板弹窗 ClipboardHistoryPopup 保持一致的光标间距
+    _folder_popup_cursor_gap = 28
+
+    def _compute_folder_popup_position(
+        self, width: int, height: int, pos: QtCore.QPoint
+    ) -> tuple[int, int]:
+        """在光标旁摆放折叠文件夹浮层，逻辑参考剪贴板弹窗 _move_near_cursor。
+
+        优先光标左下方（保持习惯），放不下时依次尝试右下/左上/右上；
+        四向都放不下取溢出最小的方向 clamp 到屏内。
+        """
+        gap = self._folder_popup_cursor_gap
+        candidates = [
+            (pos.x() - width + 12, pos.y() + gap),         # 左下（默认）
+            (pos.x() + gap, pos.y() + gap),                # 右下
+            (pos.x() - width + 12, pos.y() - height - gap),  # 左上
+            (pos.x() + gap, pos.y() - height - gap),       # 右上
+        ]
+        scr = QtWidgets.QApplication.screenAt(pos)
+        geo = scr.availableGeometry() if scr is not None else None
+        if geo is None:
+            return int(candidates[0][0]), int(candidates[0][1])
+        for x, y in candidates:
+            if (
+                geo.left() <= x <= geo.right() - width
+                and geo.top() <= y <= geo.bottom() - height
+            ):
+                return int(x), int(y)
+
+        # 四向都放不下（极小分辨率/大 DPI 缩放）：取溢出最小方向 clamp 到屏内
+        def _overflow(xy) -> int:
+            x, y = xy
+            return (
+                max(0, geo.left() - x)
+                + max(0, x - (geo.right() - width))
+                + max(0, geo.top() - y)
+                + max(0, y - (geo.bottom() - height))
+            )
+
+        bx, by = min(candidates, key=_overflow)
+        return (
+            int(max(geo.left(), min(bx, geo.right() - width))),
+            int(max(geo.top(), min(by, geo.bottom() - height))),
+        )
+
+    def _hide_folder_hover_popup(self) -> None:
+        self._cancel_hide_folder_hover_popup()
+        self._folder_hover_item = None
+        popup = getattr(self, "_folder_hover_popup", None)
+        if popup is not None and popup.isVisible():
+            popup.hide()
+
     # ── 中键拖拽调序（拖影 + 落点线）────────────────────────────────
+    def _notes_drop_viewport(self):
+        """返回当前笔记浏览控件的 viewport（树模式用树，否则用列表）。"""
+        if self._notes_tree_mode and self.notes_tree is not None:
+            return self.notes_tree.viewport()
+        if self.notes_list is not None:
+            return self.notes_list.viewport()
+        return None
+
+    def _handle_external_file_drop(self, event) -> bool:
+        """接收资源管理器拖入的文件：拖入即归类到「外部文件」分组。
+
+        返回 True 表示已消费该事件（阻止 Qt 默认拖放处理）。
+        """
+        Type = QtCore.QEvent.Type
+        et = event.type()
+        if et == Type.DragEnter:
+            if _local_files_from_mime(event.mimeData()):
+                event.acceptProposedAction()
+                self._show_external_drop_hint(True)
+                return True
+            return False
+        if et == Type.DragMove:
+            if _local_files_from_mime(event.mimeData()):
+                event.acceptProposedAction()
+                self._show_external_drop_hint(True)
+                return True
+            return False
+        if et == Type.DragLeave:
+            self._show_external_drop_hint(False)
+            return False
+        if et == Type.Drop:
+            self._show_external_drop_hint(False)
+            paths = _local_files_from_mime(event.mimeData())
+            if not paths:
+                return False
+            self._add_dropped_external_files(paths)
+            event.acceptProposedAction()
+            return True
+        return False
+
+    def _show_external_drop_hint(self, visible: bool) -> None:
+        """拖拽悬停提示（状态栏文案）。
+
+        不用 QRubberBand/改样式：那会在 viewport 上产生子控件与重绘事件，
+        反过来又进本窗口的 eventFilter，白白跑一遍鼠标相关逻辑。
+        """
+        if getattr(self, "_external_drop_hint_on", False) == visible:
+            return
+        self._external_drop_hint_on = visible
+        if visible:
+            self.status.showMessage("松开即可加入「外部文件」分组", 4000)
+
+    def _add_dropped_external_files(self, paths: list[str]) -> None:
+        """把拖入的硬盘文件加入「外部文件」分组并打开第一个。
+
+        拖入的文件来自资源管理器（用户主动要查看/编辑的硬盘文件），
+        因此归「外部文件」，而不是只由其它程序推送的「IPC 文件」。
+        """
+        valid: list[str] = []
+        for raw in paths:
+            try:
+                p = Path(raw)
+                is_file = p.is_file()
+            except OSError:
+                is_file = False
+            if not is_file:
+                continue
+            key = str(p)
+            if key not in valid:
+                valid.append(key)
+        if not valid:
+            lprint(f"[拖入外部文件] 没有可用文件: {paths}")
+            self.status.showMessage("拖入的内容里没有可用文件", 3000)
+            return
+        new_count = sum(1 for key in valid if key not in self._external_files)
+        # 本次拖入的文件按拖入顺序置顶（最近拖入排最前）
+        for key in reversed(valid):
+            if key in self._external_files:
+                self._external_files.remove(key)
+            self._external_files.insert(0, key)
+        first = self._external_files[0]
+        self._current_external_file = first
+        self._current_ipc_file = None
+        self._save_external_files_state()
+        lprint(f"[拖入外部文件] 新增={new_count} 打开={first} 全部={len(valid)}")
+        # 刷新后再选中：refresh_notes 是后台线程，_populate_notes 会按
+        # _current_external_file 恢复选中并载入内容
+        self.refresh_notes()
+        self._select_external_file(first)
+        if new_count:
+            extra = f" 等 {len(valid)} 个文件" if len(valid) > 1 else ""
+            self.status.showMessage(
+                f"已加入「外部文件」：{Path(first).name}{extra}", 3000
+            )
+        else:
+            self.status.showMessage(f"已在「外部文件」中：{Path(first).name}", 2500)
+
     def _handle_tree_mid_drag(self, tree, event) -> bool:
         Type = QtCore.QEvent.Type
         et = event.type()
@@ -4975,18 +6119,41 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             return self._folder_of_title(item.data(0, QtCore.Qt.ItemDataRole.UserRole + 1) or "")
         if isinstance(role, str) and role.startswith("__folder__:"):
             fp = role[len("__folder__:"):]
+            if fp == FAVORITES_GROUP_NAME:
+                # 「★ 收藏」是虚拟分组，不接受拖放，避免创建同名真实目录
+                return None
             return "" if fp == "未归档" else fp
         return None
 
 
 
-    def _is_favorite(self, note_id: int | None) -> bool:
-        if note_id is None:
+    @staticmethod
+    def _external_key(file_path: str) -> str:
+        """外部文件收藏 key（与树/列表 item 的 UserRole 一致）。"""
+        return f"{EXTERNAL_FILE_PREFIX}{file_path}"
+
+    @staticmethod
+    def _ipc_key(file_path: str) -> str:
+        """IPC 文件收藏 key（与树/列表 item 的 UserRole 一致）。"""
+        return f"{IPC_FILE_PREFIX}{file_path}"
+
+    def _current_favorite_key(self):
+        """返回当前编辑内容的收藏 key（笔记 int / 外部与 IPC 文件 str / 其它 None）。"""
+        if self._current_ipc_file:
+            return self._ipc_key(self._current_ipc_file)
+        if self._current_external_file:
+            return self._external_key(self._current_external_file)
+        if self.state.current_note_id is not None:
+            return int(self.state.current_note_id)
+        return None
+
+    def _is_favorite(self, key) -> bool:
+        if key is None:
             return False
-        return int(note_id) in self._favorite_order
+        return key in self._favorite_order
 
     def _update_favorite_button_label(self) -> None:
-        if self._is_favorite(self.state.current_note_id):
+        if self._is_favorite(self._current_favorite_key()):
             self.btn_favorite.setText("取消※置顶")
         else:
             self.btn_favorite.setText("※ 置顶/收藏")
@@ -5000,7 +6167,19 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         font_size_raw = self._settings.value("ui/text_font_size", "10")
         try:
             parsed = json.loads(str(fav_raw)) if fav_raw is not None else []
-            self._favorite_order = [int(x) for x in parsed]
+            favs: list[int | str] = []
+            for x in parsed or []:
+                if isinstance(x, bool):
+                    continue
+                if isinstance(x, int):
+                    favs.append(int(x))
+                elif isinstance(x, str) and x.strip():
+                    favs.append(x)
+            # 去重并保持顺序
+            seen: set = set()
+            self._favorite_order = [
+                x for x in favs if not (x in seen or seen.add(x))
+            ]
         except Exception:
             self._favorite_order = []
         try:
@@ -5178,7 +6357,13 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
                 )
             except Exception:
                 pass
-            self._settings.setValue("window/geometry", self.saveGeometry())
+            # 只在窗口可见且尺寸有效时才保存几何，避免在初始化/隐藏/关闭过程
+            # 中用 (0,0,0,0) 覆盖掉之前保存的有效位置与大小（重启后无法还原）。
+            try:
+                if self.isVisible() and self.width() > 0 and self.height() > 0:
+                    self._settings.setValue("window/geometry", self.saveGeometry())
+            except Exception:
+                pass
             self._settings.sync()
         except Exception:
             pass
@@ -5495,6 +6680,10 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
 
     def _restore_window_state(self) -> None:
         geo = self._settings.value("window/geometry")
-        if isinstance(geo, (bytes, bytearray)):
+        # PySide6 里 QSettings 返回的是 QByteArray，不是 bytes/bytearray，
+        # 之前用 isinstance(geo,(bytes,bytearray)) 判断恒为 False，导致窗口
+        # 位置/大小永远恢复不了（重启后总是回到默认 980x640）。直接交给
+        # restoreGeometry，它对无效/空数据会安全地返回 False，仅需排除 None。
+        if geo is not None:
             self.restoreGeometry(geo)
 

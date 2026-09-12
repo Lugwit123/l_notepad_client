@@ -32,9 +32,6 @@ def commands():
 
     # Pure PC mode: local file-based notes, no backend process.
     # 使用 cmd /c 包装以设置 UTF-8 代码页
-    alias("l_notepad", "python -m l_notepad_client.local_main")
+    alias("l_notepad_client", "python -m l_notepad_client.local_main")
     # 原始模式：不使用自定义无边框标题栏，使用系统原生标题栏
     alias("l_notepad_ori", "python -m l_notepad_client.local_main_ori")
-    # Keep original behavior: launch UI with embedded backend service.
-    # 需要本机装有 l_notepad_server 才能拉起内嵌后端；缺省走本地/HTTP 双数据源。
-    alias("l_notepad_with_api", "python -m l_notepad_client.main")

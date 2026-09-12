@@ -89,6 +89,24 @@ def add_version(kind: str, ref: str, title: str, content: str) -> bool:
         return True
 
 
+def migrate_versions(kind: str, old_ref: str, new_ref: str) -> int:
+    """把 (kind, old_ref) 的历史版本迁移到 new_ref。
+
+    本地笔记的 ref 由相对路径的 crc32 生成，改名/移动后 id 会变化；迁移可保证
+    改名后旧版本仍然可见（否则界面会显示「暂无历史版本」）。返回迁移的版本数。
+    """
+    if not old_ref or not new_ref or old_ref == new_ref:
+        return 0
+    with _lock:
+        conn = _get_conn()
+        cur = conn.execute(
+            "UPDATE versions SET ref=? WHERE kind=? AND ref=?",
+            (new_ref, kind, old_ref),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
 def list_versions(kind: str, ref: str) -> list[dict]:
     """返回 (kind, ref) 的版本列表（新→旧），不含完整内容，仅含预览与长度。"""
     if not ref:

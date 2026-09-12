@@ -19,12 +19,10 @@ import urllib.request
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtNetwork, QtWidgets
-from l_qframelesswindow import L_FramelessMainWindow
+from l_qframelesswindow import L_FramelessMainWindow, LoginStore
 
-from . import auth as authmod
 from . import file_store
 from . import server_config
 from .api_client import ApiError, LogDto, NoteDto, NotepadApi
@@ -37,8 +35,6 @@ from .ui import MainWindow as NotepadContentWindow
 
 DOUBLE_CTRL_MIN_GAP_SEC = 0.05
 DOUBLE_CTRL_MAX_GAP_SEC = 0.15
-
-_TOKEN_FILE = data_root() / "auth_token.json"
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -868,182 +864,15 @@ class LocalNotepadApi:
             target.unlink()
 
 
-class LoginDialog(QtWidgets.QDialog):
-    """登录对话框：用户名 + 密码，调 Auth Service 登录。
+class MainWindow(L_FramelessMainWindow):
+    """本地模式无边框主窗口，使用 L_FramelessMainWindow 作为标题栏外壳。
 
-    「记住账号密码」复选框：勾选状态下启动时自动回填账号 + 密码；
-    无论登录成败，都按勾选状态决定是否把账号/明文密码写入
-    <data_dir>/remembered_login.json（登录失败也保存，下次回填）；
-    取消勾选后下次登录即清除该文件。
-
-    「下次自动登录」复选框：勾选（需同时勾选记住账号密码）后，启动时
-    用记住的账号密码静默登录，不再弹出登录对话框。
+    登录功能（标题栏登录按钮 + 登录对话框 + 启动恢复登录）已上移为
+    l_qframelesswindow 标题栏库的内置通用能力（setLoginStore 注入启用）；
+    本窗口只连接 loginSuccess / logoutSuccess 信号处理业务面板。
     """
 
-    _REMEMBER_FILE = data_root() / "remembered_login.json"
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("登录 Lugwit 账号")
-        self.setFixedWidth(340)
-        self._token: str | None = None
-        self._username: str = ""
-
-        outer = QtWidgets.QVBoxLayout(self)
-        outer.setContentsMargins(16, 16, 16, 16)
-        outer.setSpacing(10)
-
-        title = QtWidgets.QLabel("🔐 登录")
-        title.setStyleSheet("font-size: 15px; font-weight: bold; color: #E8EAED;")
-        outer.addWidget(title)
-
-        self._error_label = QtWidgets.QLabel("")
-        self._error_label.setStyleSheet("color: #f28b82; font-size: 12px;")
-        self._error_label.setWordWrap(True)
-        self._error_label.setVisible(False)
-        outer.addWidget(self._error_label)
-
-        form = QtWidgets.QFormLayout()
-        self._user_edit = QtWidgets.QLineEdit()
-        self._user_edit.setPlaceholderText("用户名（如 admin01）")
-        self._pwd_edit = QtWidgets.QLineEdit()
-        self._pwd_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        self._pwd_edit.setPlaceholderText("密码")
-        self._pwd_edit.returnPressed.connect(self._on_confirm)
-        form.addRow("用户名", self._user_edit)
-        form.addRow("密码", self._pwd_edit)
-        outer.addLayout(form)
-
-        self._remember_cb = QtWidgets.QCheckBox("记住账号密码")
-        self._remember_cb.toggled.connect(self._on_remember_toggled)
-        outer.addWidget(self._remember_cb)
-
-        self._auto_cb = QtWidgets.QCheckBox("下次自动登录")
-        self._auto_cb.toggled.connect(self._on_auto_toggled)
-        outer.addWidget(self._auto_cb)
-
-        btn_row = QtWidgets.QHBoxLayout()
-        btn_row.addStretch(1)
-        cancel_btn = QtWidgets.QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
-        ok_btn = QtWidgets.QPushButton("登录")
-        ok_btn.setDefault(True)
-        ok_btn.clicked.connect(self._on_confirm)
-        btn_row.addWidget(cancel_btn)
-        btn_row.addWidget(ok_btn)
-        outer.addLayout(btn_row)
-
-        # 启动时回填：只有上次勾选了「记住」才会写入文件并回填
-        remembered = self._load_remembered()
-        if remembered:
-            self._user_edit.setText(remembered.get("username", ""))
-            self._pwd_edit.setText(remembered.get("password", ""))
-            self._remember_cb.setChecked(True)
-            if remembered.get("auto_login"):
-                self._auto_cb.setChecked(True)
-
-    def _on_confirm(self) -> None:
-        username = self._user_edit.text().strip()
-        password = self._pwd_edit.text()
-        if not username or not password:
-            self._show_error("请输入用户名和密码")
-            return
-        # 记住账号密码：无论登录成败都按勾选状态生效（登录失败也保存，下次回填）
-        if self._remember_cb.isChecked():
-            self._save_remembered(username, password, auto_login=self._auto_cb.isChecked())
-        else:
-            self._clear_remembered()
-        try:
-            body = json.dumps({"username": username, "password": password}).encode("utf-8")
-            req = urllib.request.Request(
-                f"{server_config.auth_url()}{server_config.auth_route()}/login",
-                data=body,
-                method="POST",
-            )
-            req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = ""
-            try:
-                detail = json.loads(exc.read().decode("utf-8")).get("detail", "")
-            except Exception:  # noqa: BLE001
-                detail = ""
-            self._show_error(str(detail) or f"登录失败 (HTTP {exc.code})")
-            return
-        except Exception as exc:  # noqa: BLE001
-            self._show_error(f"无法连接认证服务: {exc}")
-            return
-        token = data.get("access_token") or data.get("token")
-        if not token:
-            self._show_error("认证服务返回异常，缺少 token")
-            return
-        self._token = token
-        self._username = (data.get("user") or {}).get("username", username)
-        self.accept()
-
-    def _show_error(self, text: str) -> None:
-        self._error_label.setText(text)
-        self._error_label.setVisible(True)
-
-    # ── 「记住账号密码」持久化 ──────────────────────────────
-    def _on_remember_toggled(self, checked: bool) -> None:
-        """取消勾选即时清空持久化文件（避免下次误回填）。"""
-        if not checked:
-            self._clear_remembered()
-
-    @classmethod
-    def _remember_file(cls) -> Path:
-        return cls._REMEMBER_FILE
-
-    @staticmethod
-    def _save_remembered(username: str, password: str) -> None:
-        """把账号 + 密码明文写入 remembered_login.json（用户主动勾选才会触发）。"""
-        try:
-            f = LoginDialog._REMEMBER_FILE
-            f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(
-                json.dumps(
-                    {"username": username, "password": password},
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
-        except Exception as exc:  # noqa: BLE001
-            lprint(f"[l_notepad] 保存「记住账号密码」失败: {exc}")
-
-    @staticmethod
-    def _load_remembered() -> dict[str, str] | None:
-        """读取上次记住的账号密码；文件不存在或损坏返回 None。"""
-        f = LoginDialog._REMEMBER_FILE
-        if not f.exists():
-            return None
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                return None
-            return data
-        except Exception as exc:  # noqa: BLE001
-            lprint(f"[l_notepad] 读取「记住账号密码」失败: {exc}")
-            return None
-
-    @staticmethod
-    def _clear_remembered() -> None:
-        """删除 remembered_login.json（用户取消勾选或新一次登录未勾选时触发）。"""
-        f = LoginDialog._REMEMBER_FILE
-        if f.exists():
-            try:
-                f.unlink()
-            except Exception as exc:  # noqa: BLE001
-                lprint(f"[l_notepad] 清除「记住账号密码」失败: {exc}")
-
-
-class MainWindow(L_FramelessMainWindow):
-    """本地模式无边框主窗口，使用 L_FramelessMainWindow 作为标题栏外壳。"""
-
     file_open_requested = QtCore.Signal(str)
-    # 后台线程验证 token 通过后，经此信号回到主线程应用登录（QTimer.singleShot 在后台线程无事件循环，回调不会触发）
-    _login_restore_signal = QtCore.Signal(str, str)
 
     def __init__(
         self,
@@ -1091,15 +920,15 @@ class MainWindow(L_FramelessMainWindow):
         # 设置标题栏左侧图标的右键菜单（隐藏后仍然有效）
         self._setup_icon_context_menu()
 
-        # ── 标题栏登录按钮（右侧）──
-        self._login_user: str = ""
-        self._login_btn: QtWidgets.QPushButton | None = None
-        # 注入标题栏库内置的服务器配置存储 + 对话框（登录按钮右键菜单打开）
+        # ── 标题栏登录（标题栏库内置通用能力）──
+        # 注入服务器配置存储（登录按钮右键菜单打开「服务器设置」对话框，
+        # 登录 / token 验证地址也由它提供）
         self.setServerConfigStore(server_config.store(), show_button=False)
-        # 跨线程：后台验证通过后经信号回主线程应用登录
-        self._login_restore_signal.connect(self._apply_login)
-        self._init_login_button()
-        QtCore.QTimer.singleShot(0, self._restore_saved_login)
+        # 注入登录存储：标题栏内置登录按钮 + 登录对话框 + 启动恢复登录；
+        # 业务侧连接 loginSuccess / logoutSuccess 信号切换面板 API
+        self.setLoginStore(LoginStore(data_dir=data_root()))
+        self.loginSuccess.connect(self._apply_login)
+        self.logoutSuccess.connect(self._on_logged_out)
 
     def _sync_title_bar_from_content(self) -> None:
         icon = self.content_window.windowIcon()
@@ -1166,59 +995,7 @@ class MainWindow(L_FramelessMainWindow):
         # 使用回调函数方式，每次右键时动态构建菜单
         self.setIconContextMenuCallback(setup_menu)
 
-    # ── 标题栏登录 ────────────────────────────────────────
-    def _init_login_button(self) -> None:
-        btn = QtWidgets.QPushButton("登录")
-        btn.setObjectName("titleBarLoginButton")
-        btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(
-            "QPushButton { background: rgba(255,255,255,0.08); color: #E8EAED;"
-            " border: 1px solid rgba(255,255,255,0.15); border-radius: 4px;"
-            " padding: 2px 10px; font-size: 11px; }"
-            "QPushButton:hover { background: rgba(255,255,255,0.16); }"
-        )
-        btn.clicked.connect(self._on_login_btn_clicked)
-        btn.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
-        btn.customContextMenuRequested.connect(self._on_login_btn_context_menu)
-        self._login_btn = btn
-        self.addEndWidget(btn)
-        if btn.parent() is None:
-            # 标题栏 end 容器尚未就绪（异常时序兜底）：延迟重试
-            QtCore.QTimer.singleShot(0, self._retry_attach_login_btn)
-        else:
-            lprint("[l_notepad] 登录按钮已加入标题栏")
-
-    def _retry_attach_login_btn(self) -> None:
-        btn = self._login_btn
-        if btn is None:
-            return
-        if btn.parent() is None:
-            self.addEndWidget(btn)
-        if btn.parent() is not None:
-            lprint("[l_notepad] 登录按钮延迟加入成功")
-
-    def _on_login_btn_clicked(self) -> None:
-        if self._current_login_user():
-            self._logout()
-        else:
-            dlg = LoginDialog(self)
-            if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-                self._apply_login(dlg._token or "", dlg._username or "")
-
-    def _on_login_btn_context_menu(self, _pos) -> None:
-        """右键登录按钮：弹出「服务器设置」入口。"""
-        menu = QtWidgets.QMenu(self)
-        act_server = menu.addAction("🌐 服务器设置...")
-        act_server.triggered.connect(self._show_server_settings_dialog)
-        menu.exec(QtGui.QCursor.pos())
-
-    def _show_server_settings_dialog(self) -> None:
-        """打开标题栏库内置的「服务器设置」对话框（认证地址 / 认证路由）。"""
-        self.showServerSettingsDialog()
-
-    def _current_login_user(self) -> str:
-        return getattr(self, "_login_user", "") or ""
-
+    # ── 登录业务侧（连接标题栏库登录信号）──────────────────
     def _account_panel(self):
         return getattr(self.content_window, "_account_favorites_panel", None)
 
@@ -1235,7 +1012,11 @@ class MainWindow(L_FramelessMainWindow):
         return panels
 
     def _apply_login(self, token: str, username: str) -> None:
-        """应用登录状态：账号收藏切换到登录用户的 HTTP API，并持久化 token。"""
+        """应用登录状态：账号收藏切换到登录用户的 HTTP API。
+
+        由标题栏库 loginSuccess 信号触发（登录对话框成功 / 启动恢复登录）；
+        登录按钮状态与 token 持久化由库负责，这里只处理业务面板。
+        """
         panel = self._account_panel()
         if panel is None:
             lprint("[l_notepad] 账号收藏面板未初始化，无法应用登录状态")
@@ -1257,10 +1038,6 @@ class MainWindow(L_FramelessMainWindow):
         # 收藏标签页（文件夹/命令/网址）注入云同步 API
         for fav_panel in self._favorite_panels():
             fav_panel.set_cloud_api(api)
-        self._login_user = username
-        if self._login_btn is not None:
-            self._login_btn.setText(username)
-            self._login_btn.setToolTip("点击登出")
         try:
             panel.reload_data()
         except Exception as exc:  # noqa: BLE001
@@ -1271,17 +1048,9 @@ class MainWindow(L_FramelessMainWindow):
                 panel._save_offline_cache()
         except Exception as exc:  # noqa: BLE001
             lprint(f"[l_notepad] 保存离线账号缓存失败: {exc}")
-        try:
-            _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _TOKEN_FILE.write_text(
-                json.dumps({"token": token, "username": username}, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except Exception as exc:  # noqa: BLE001
-            lprint(f"[l_notepad] 保存登录 token 失败: {exc}")
 
-    def _logout(self) -> None:
-        """登出：账号收藏回退本机免登录（system01），删除持久化 token。"""
+    def _on_logged_out(self) -> None:
+        """登出后清理：账号收藏回退本机免登录（system01），收藏标签页隐藏云 item。"""
         panel = self._account_panel()
         if panel is not None:
             # 无 token → _ensure_api_token 自动走本机免登录；auth_url=1027 直连账号数据
@@ -1290,76 +1059,18 @@ class MainWindow(L_FramelessMainWindow):
                 panel.reload_data()
             except Exception as exc:  # noqa: BLE001
                 lprint(f"[l_notepad] 登出后重载账号失败: {exc}")
-        # 收藏标签页清除云 API（云 item 隐藏）
         for fav_panel in self._favorite_panels():
             try:
                 fav_panel.set_cloud_api(None)
             except Exception as exc:  # noqa: BLE001
                 lprint(f"[l_notepad] 登出清理云同步失败: {exc}")
-        self._login_user = ""
-        if self._login_btn is not None:
-            self._login_btn.setText("登录")
-            self._login_btn.setToolTip("登录 Lugwit 账号")
-        try:
-            if _TOKEN_FILE.exists():
-                _TOKEN_FILE.unlink()
-        except Exception as exc:  # noqa: BLE001
-            lprint(f"[l_notepad] 删除登录 token 失败: {exc}")
 
     def _on_login_expired(self) -> None:
         """账号收藏面板报告登录凭据失效：清除主窗口登录状态（弹窗由面板按操作提示）"""
-        if not self._current_login_user():
+        if not self.currentLoginUser():
             return
         lprint("[l_notepad] 登录凭据已失效，清除登录状态")
-        self._logout()
-
-    def _restore_saved_login(self) -> None:
-        """启动时恢复上次登录（先验证 token 有效性，失败则清除）。"""
-        if self._current_login_user():
-            return
-        try:
-            if not _TOKEN_FILE.exists():
-                return
-            data = json.loads(_TOKEN_FILE.read_text(encoding="utf-8"))
-            token = str(data.get("token") or "").strip()
-            username = str(data.get("username") or "").strip()
-            if not (token and username):
-                return
-        except Exception as exc:  # noqa: BLE001
-            lprint(f"[l_notepad] 恢复登录状态失败: {exc}")
-            return
-
-        def _do_restore() -> None:
-            """后台验证 token（避免阻塞启动）。
-
-            区分「token 无效」与「Auth 服务暂不可用」：
-            - 明确无效（401/valid=False）→ 清除 token；
-            - 服务暂不可用（连接失败/超时）→ 保留 token 并递增间隔重试，
-              避免 Auth 服务启动慢于本程序时误删 token 导致每次都要重新登录。
-            """
-            last_exc: Optional[Exception] = None
-            for attempt in range(3):
-                try:
-                    if authmod.verify_token(token) is None:
-                        lprint("[l_notepad] 保存的登录 token 已失效，清除")
-                        try:
-                            _TOKEN_FILE.unlink()
-                        except Exception:  # noqa: BLE001
-                            pass
-                        return
-                    self._login_restore_signal.emit(token, username)
-                    return
-                except Exception as exc:  # noqa: BLE001
-                    last_exc = exc
-                    lprint(
-                        f"[l_notepad] 恢复登录：Auth 服务暂不可用(第{attempt + 1}次) - {exc}")
-                    time.sleep(2 + attempt * 2)  # 2s / 4s / 6s
-            lprint(
-                "[l_notepad] 恢复登录：Auth 服务持续不可用，"
-                f"保留 token 待下次重试 ({last_exc})"
-            )
-
-        threading.Thread(target=_do_restore, daemon=True).start()
+        self.logout()
 
     def _show_settings_dialog(self) -> None:
         """弹出设置对话框"""
@@ -1397,8 +1108,20 @@ class MainWindow(L_FramelessMainWindow):
         if hasattr(self.content_window, "_open_external_file"):
             self.content_window._open_external_file()
     
+    def _save_window_state_flushed(self) -> None:
+        """保存外壳窗口几何并立即 sync，确保重启/退出的新进程能读到。"""
+        try:
+            self.saveWindowState()
+            settings = getattr(self, "_settings", None)
+            if settings is not None:
+                settings.sync()
+        except Exception as exc:
+            lprint(f"保存窗口状态失败: {exc}")
+
     def _restart_app(self) -> None:
         """重启应用"""
+        # 重启前保存外壳窗口几何（重启走子进程，新进程靠它恢复大小/位置）
+        self._save_window_state_flushed()
         # 调用 content_window 的重启方法（如果存在）
         if hasattr(self.content_window, "_restart_app"):
             self.content_window._restart_app()
@@ -1408,6 +1131,7 @@ class MainWindow(L_FramelessMainWindow):
         # 获取 QApplication 实例
         app = QtWidgets.QApplication.instance()
         if app:
+            self._save_window_state_flushed()
             # 允许真正关闭（绕过托盘最小化逻辑）
             setattr(self, "_allow_close", True)
             if hasattr(self.content_window, "_allow_close"):
@@ -1482,6 +1206,10 @@ class MainWindow(L_FramelessMainWindow):
                 pass
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        # 关闭到托盘前保存外壳窗口几何：本类重写了 closeEvent 且未调用 super()，
+        # 会绕过 L_FramelessMainWindow 内置的 saveWindowState()，导致下次启动/重启
+        # 无法恢复窗口大小与位置（总是回到默认 980x640）。
+        self._save_window_state_flushed()
         # 先让 content_window 处理 closeEvent（自动保存等）
         self.content_window.closeEvent(event)
         

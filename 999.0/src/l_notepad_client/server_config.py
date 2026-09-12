@@ -13,7 +13,7 @@ host 默认值由系统级环境变量 Lugwit_deploy 自动区分：
                                公网登录路由即 http://121.196.144.88:8080/api/v1/auth/login）
     api_url / log_server_url = <host>/note（location /note/ 剥前缀转发到笔记后端 8765）
 
-注意：本模块不得依赖 PySide6/Qt，以便非 UI 模块（auth、backend_server 等）直接使用。
+注意：本模块不得依赖 PySide6/Qt，以便非 UI 模块（如 backend_server 等）直接使用。
 """
 from __future__ import annotations
 

@@ -15,7 +15,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from pytracemp import lprint
 
 from . import server_config
+from . import fav_vars
 from .folder_favorites_widget import (
+    attach_var_preview,
     _favorites_copy_to_clipboard,
     _favorites_read_from_clipboard,
     _icon_with_cloud,
@@ -339,6 +341,15 @@ class AddAccountDialog(QtWidgets.QDialog):
 
                 self._custom_field_inputs[field_name] = value_input
 
+        # 内置变量实时预览（{y}{m}{d} {pc} {user} ...）
+        preview_pairs = [
+            ("名称", self.name_input),
+            ("用户名", self.username_input),
+            ("服务器", self.server_input),
+            ("备注", self.notes_input),
+        ] + [(key, input_widget) for key, input_widget in self._custom_field_inputs.items()]
+        attach_var_preview(layout, preview_pairs)
+
         layout.addStretch()
 
         # 按钮
@@ -382,6 +393,11 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self.setObjectName("tab_account_favorites")
         self._accounts: list[AccountItem] = []
+        # 列表行号 → 账号 dict（真实对象）映射，随 _refresh_list 重建。
+        # 未登录时云账号会被隐藏，导致 list_widget 行号与 self._accounts 下标
+        # 不一致；且 item.data(UserRole) 返回的是 QVariant 深拷贝副本，无法按
+        # 对象身份定位回 self._accounts。此映射按“可见顺序”记录真实对象。
+        self._row_to_account: dict[int, AccountItem] = {}
         self._custom_field_names: list[str] = []  # 全局自定义字段名模板
         self._ui_finalized = False
         self.api = None  # NotepadApi（由主窗口注入；为 None 时回退本地 JSON）
@@ -490,7 +506,7 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
 
     def _apply_list_style(self) -> None:
         """应用列表样式"""
-        self.list_widget.setSpacing(2)
+        self.list_widget.setSpacing(0)
         self.list_widget.setUniformItemSizes(True)
         self.list_widget.setIconSize(QtCore.QSize(16, 16))
         self.list_widget.setStyleSheet(
@@ -503,11 +519,12 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
                 
             }
             QListWidget#account_favorites_list::item {
-                min-height: 18px;
-                padding: 1px 6px;
-                margin: 1px 0;
+                min-height: 22px;
+                padding: 0px 1px;
+                margin: 0;
                 border-radius: 4px;
                 color: #e0e0e0;
+                font-size: 18px;
             }
             QListWidget#account_favorites_list::item:selected {
                 border: 1px solid #44a8eb;
@@ -732,14 +749,13 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
             return True
         return self._ensure_api_token()
 
-    def _toggle_cloud(self, row: int) -> None:
+    def _toggle_cloud(self, account: dict) -> None:
         """右键切换：本地 ↔ 云同步。"""
-        if row < 0 or row >= len(self._accounts):
+        if not isinstance(account, dict):
             return
         if not self._cloud_ready():
             QtWidgets.QMessageBox.information(self, "提示", "请先登录后再使用云同步")
             return
-        account = self._accounts[row]
         try:
             if account.get("cloud"):
                 if account.get("id"):
@@ -808,6 +824,7 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
         if not getattr(self, "list_widget", None):
             return
         self.list_widget.clear()
+        self._row_to_account = {}
         cloud_visible = getattr(self, "_cloud_ready_state", False)
         cloud_count = sum(1 for a in self._accounts if a.get("cloud"))
         local_count = len(self._accounts) - cloud_count
@@ -833,13 +850,13 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
             # 云 item 未登录时隐藏（数据在服务器，仅登录用户可见）
             if account.get("cloud") and not cloud_visible:
                 continue
-            name = account.get("name", "未命名")
-            username = account.get("username", "")
-            server = account.get("server", "")
+            name = fav_vars.expand(account.get("name", "未命名"))
+            username = fav_vars.expand(account.get("username", ""))
+            server = fav_vars.expand(account.get("server", ""))
             custom_fields = account.get("custom_fields", {})
 
             item = QtWidgets.QListWidgetItem()
-            item.setSizeHint(QtCore.QSize(0, 20))
+            item.setSizeHint(QtCore.QSize(0, 22))
 
             display_text = name
             if username:
@@ -855,6 +872,7 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
             item.setIcon(_icon_with_cloud(account_icon, bool(account.get("cloud"))))
             item.setData(QtCore.Qt.ItemDataRole.UserRole, account)
             self.list_widget.addItem(item)
+            self._row_to_account[self.list_widget.count() - 1] = account
 
     def _add_account(self) -> None:
         """添加新账号（默认保存为本地项，登录后可在右键菜单同步到云）"""
@@ -868,6 +886,22 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
             self._save_favorites()
             self._refresh_list()
 
+    def _current_account(self) -> dict | None:
+        """当前列表选中项的账号 dict（真实对象）。
+
+        用渲染时记录的「行号 → 真实对象」映射，避免未登录时云账号被隐藏导致
+        行号与 self._accounts 下标错位，也避免 item.data(UserRole) 的深拷贝副本。
+        """
+        account = self._row_to_account.get(self.list_widget.currentRow())
+        return account if isinstance(account, dict) else None
+
+    def _find_account_index(self, account: dict) -> int:
+        """按对象身份在 self._accounts 中定位下标（返回 -1 表示不存在）。"""
+        for i, a in enumerate(self._accounts):
+            if a is account:
+                return i
+        return -1
+
     def _edit_account(self) -> None:
         """编辑选中的账号"""
         current_item = self.list_widget.currentItem()
@@ -875,7 +909,7 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
             QtWidgets.QMessageBox.information(self, "提示", "请先选择要编辑的账号")
             return
 
-        account = current_item.data(QtCore.Qt.ItemDataRole.UserRole)
+        account = self._current_account()
         if not account:
             return
 
@@ -895,7 +929,7 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
             if not new_data.get("name"):
                 QtWidgets.QMessageBox.warning(self, "提示", "请输入显示名称")
                 return
-            idx = self.list_widget.row(current_item)
+            idx = self._find_account_index(account)
             if 0 <= idx < len(self._accounts):
                 old = self._accounts[idx]
                 if old.get("cloud"):
@@ -926,7 +960,7 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
             QtWidgets.QMessageBox.information(self, "提示", "请先选择要删除的账号")
             return
 
-        account = current_item.data(QtCore.Qt.ItemDataRole.UserRole)
+        account = self._current_account()
         if not account:
             return
 
@@ -939,7 +973,7 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
         )
 
         if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-            idx = self.list_widget.row(current_item)
+            idx = self._find_account_index(account)
             if 0 <= idx < len(self._accounts):
                 removed = self._accounts.pop(idx)
                 if removed.get("cloud") and self._cloud_ready():
@@ -968,21 +1002,21 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
 
         lines = []
         if account.get("name"):
-            lines.append(f"名称: {account['name']}")
+            lines.append(f"名称: {fav_vars.expand(account['name'])}")
         if account.get("username"):
-            lines.append(f"用户名: {account['username']}")
+            lines.append(f"用户名: {fav_vars.expand(account['username'])}")
         if account.get("password"):
             lines.append(f"密码: {account['password']}")
         if account.get("server"):
-            lines.append(f"服务器: {account['server']}")
+            lines.append(f"服务器: {fav_vars.expand(account['server'])}")
         if account.get("notes"):
-            lines.append(f"备注: {account['notes']}")
+            lines.append(f"备注: {fav_vars.expand(account['notes'])}")
         # 自定义字段
         custom_fields = account.get("custom_fields", {})
         if custom_fields:
             for key, value in custom_fields.items():
                 if value:
-                    lines.append(f"{key}: {value}")
+                    lines.append(f"{key}: {fav_vars.expand(value)}")
 
         if not lines:
             QtWidgets.QMessageBox.information(self, "提示", "该账号没有可复制的信息")
@@ -1008,9 +1042,13 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
     def _show_context_menu(self, pos: QtCore.QPoint) -> None:
         """显示右键菜单"""
         current_item = self.list_widget.itemAt(pos)
-        account = current_item.data(QtCore.Qt.ItemDataRole.UserRole) if current_item else None
+        account = None
         if current_item is not None:
-            self.list_widget.setCurrentRow(self.list_widget.row(current_item))
+            row = self.list_widget.row(current_item)
+            self.list_widget.setCurrentRow(row)
+            # 用渲染时记录的真实对象，避免 item.data(UserRole) 深拷贝导致
+            # 云同步切换写不回 self._accounts，也避免未登录时行号错位。
+            account = self._row_to_account.get(row)
 
         menu = QtWidgets.QMenu(self)
 
@@ -1028,9 +1066,10 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
                 if not value:
                     continue
                 has_copy_field = True
-                action = menu.addAction(f" 复制{label}: {self._shorten_for_menu(value)}")
+                shown = value if key == "password" else fav_vars.expand(value)
+                action = menu.addAction(f" 复制{label}: {self._shorten_for_menu(shown)}")
                 action.triggered.connect(
-                    lambda checked=False, v=value, lb=label: self._copy_value(v, lb)
+                    lambda checked=False, v=shown, lb=label: self._copy_value(v, lb)
                 )
 
             # 自定义字段
@@ -1044,9 +1083,10 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
                     if not value:
                         continue
                     has_copy_field = True
-                    action = menu.addAction(f" 复制{key}: {self._shorten_for_menu(value)}")
+                    shown = fav_vars.expand(value)
+                    action = menu.addAction(f" 复制{key}: {self._shorten_for_menu(shown)}")
                     action.triggered.connect(
-                        lambda checked=False, v=value, lb=key: self._copy_value(v, lb)
+                        lambda checked=False, v=shown, lb=key: self._copy_value(v, lb)
                     )
 
             if has_copy_field or custom_fields:
@@ -1061,12 +1101,11 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
             menu.addSeparator()
 
             # 云标记切换：本地 ↔ 云同步（右键）
-            row = self.list_widget.row(current_item)
             cloud_action = QtGui.QAction(
                 "☁ 转为本地" if account.get("cloud") else "☁ 同步到云", self
             )
             cloud_action.triggered.connect(
-                lambda checked=False, r=row: self._toggle_cloud(r)
+                lambda checked=False, a=account: self._toggle_cloud(a)
             )
             menu.addAction(cloud_action)
 
