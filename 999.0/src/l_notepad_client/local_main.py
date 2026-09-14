@@ -1658,14 +1658,18 @@ def main(use_frameless: bool = True) -> int:
     )
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file_path = log_dir / "notepad_console.log"
-    # 每次启动清空 console 日志（覆盖模式）：日志窗口的 FileLogTailer 每次启动
-    # 从头重读整个文件，保留历史会把旧崩溃 traceback 反复回放，这里直接截断
-    log_file_handle = log_file_path.open("w", encoding="utf-8")
+    # 每次启动清空 console 日志：日志窗口的 FileLogTailer 每次启动从头重读整个文件，
+    # 保留历史会把旧崩溃 traceback 反复回放。这里先截断，之后所有句柄一律用追加模式——
+    # 之前给 TeeStream 留了一个 "w" 句柄，它和日志处理器的追加句柄各自维护文件偏移，
+    # print() 的输出按自己那份（滞后的）偏移落盘，会把文件开头的启动行覆盖掉，
+    # 结果启动段（钩子安装、热键注册等）整段缺失，排查「热键不生效」时无从下手。
+    log_file_path.write_text("", encoding="utf-8")
     setup(log_file_path)
     file_handler = SafeFileHandler(log_file_path, encoding="utf-8")
     file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     root_logger.addHandler(file_handler)
     log(f"console log file: {log_file_path}")
+    log_file_handle = log_file_path.open("a", encoding="utf-8")
     sys.stdout = TeeStream(sys.stdout, log_file_handle)
     sys.stderr = TeeStream(sys.stderr, log_file_handle)
     win.set_console_log_path(str(log_file_path))
@@ -1726,13 +1730,13 @@ def main(use_frameless: bool = True) -> int:
     def _on_ff_hotkey_failed(message: str) -> None:
         logging.warning(message)
 
-    def _on_win_v_hotkey_triggered() -> None:
-        """Win+V：捕获调用者窗口，弹出「仅剪贴板历史」小窗口。"""
+    def _popup_clipboard_history(label: str) -> None:
+        """剪贴板历史弹窗：Win+V 与 Shift+中键 共用这个入口（捕获调用者窗口后弹小窗）。"""
         fg = _foreground_process_name()
         if _is_remote_client_name(fg):
-            logging.info(f"前台为远程客户端({fg})，抑制本机 Win+V 热键")
+            logging.info(f"前台为远程客户端({fg})，抑制本机 {label} 热键")
             return
-        logging.info("Win+V 热键触发，准备弹出剪贴板历史")
+        logging.info(f"{label} 热键触发，准备弹出剪贴板历史")
         caller_hwnd = 0
         if sys.platform == "win32":
             try:
@@ -1766,7 +1770,10 @@ def main(use_frameless: bool = True) -> int:
     ff_hotkey.failed.connect(_on_ff_hotkey_failed)
     ff_hotkey.start(_on_ff_hotkey_triggered)
     # Win+V：接管系统剪贴板历史，弹出 l_notepad 自己的剪贴板历史小窗口
-    ff_hotkey.win_v_triggered.connect(_on_win_v_hotkey_triggered)
+    ff_hotkey.win_v_triggered.connect(lambda: _popup_clipboard_history("Win+V"))
+    # 备用入口 Shift+中键：远控/云桌面下键盘快捷键可能被控制端拦掉，鼠标这条仍可靠
+    ff_hotkey.clipboard_triggered.connect(
+        lambda: _popup_clipboard_history("Shift+中键"))
 
     def _log_double_key(message: str, level: int = logging.INFO) -> None:
         logging.getLogger(__name__).log(level, message)

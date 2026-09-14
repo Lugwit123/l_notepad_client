@@ -1,0 +1,170 @@
+[PYTRACEMP] version=0.1.0 trace_engine_build=20260529-multiline-backfill-v13
+[PYTRACEMP] forward_tracer=D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\pytracemp\999.0\src\pytracemp\usualFunc_helper\forward_tracer.py
+[LogFileHandler] 定时器已启动（间隔 1s）
+=== 系统编码信息 ===
+sys.stdout.encoding: 'utf-8'
+sys.getdefaultencoding(): 'utf-8'
+locale.getpreferredencoding(): 'utf-8'
+sys.getfilesystemencoding(): 'utf-8'
+pid: 91028 sys.executable: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\wuwo\py_312\python.exe
+Environment: Standalone Python
+=== 系统编码信息 ===
+
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[PYTRACEMP][DATE_LOG_PATH]"
+[arg1] ["module_name", "test_note_context_and_external_change"]
+[arg2] ["log_base_dir", "D:\Temp\Log"]
+[arg3] ["date_log_path", "D:\Temp\Log\test_note_context_and_external_change\20260913.md"]
+[arg4] ["cleared", false]
+[arg5] ["clear_error", null]   ----code_context : lprint(
+            "[PYTRACEMP][DATE_LOG_PATH]",
+            ("module_name", module_name),
+            ("log_base_dir", log_base_dir),
+            ("date_log_path", date_log_path),
+            ("cleared", cleared),
+            ("clear_error", clear_error),
+        ) 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\pytracemp\999.0\src\pytracemp\__init__.py:71, -fn: _print_date_log_path_on_import, 打印次数: 1/4, thread_name=MainThread, is_main_thread=True   
+
+D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\wuwo\py_312\Lib\inspect.py:775: UserWarning: Lugwit_Module 属性 '__wrapped__' 不存在，返回默认值
+  while not isinstance(func, type) and hasattr(func, '__wrapped__'):
+D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\wuwo\py_312\Lib\inspect.py:778: UserWarning: Lugwit_Module 属性 '__wrapped__' 不存在，返回默认值
+  func = func.__wrapped__
+[l_qt_wgt_lib] 已设置 QTWEBENGINE_CHROMIUM_FLAGS（禁用GPU/沙箱/多进程）。
+[l_qt_wgt_lib] 如果 QUiLoader() 卡死，原因通常是 plugins/designer/qwebengineview.dll
+[l_qt_wgt_lib]   → 重启电脑可解决临时性卡死
+[l_qt_wgt_lib]   → 或取消注释本文件中 _patch_quiloader_skip_designer() 彻底屏蔽
+[WARNING] 异常钩子已通过环境变量 DISABLE_EXCEPTION_HOOK 禁用
+[WARNING] Lugwit_Module: 异常钩子已禁用
+sys_executable D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\wuwo\py_312\python.exe D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\Lugwit_Module\999.0\src\Lugwit_Module\main.py
+hostName 'HIH-D-32353'
+import Lugwit_Module finish
+
+日志分支: 使用pytracemp False D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\Lugwit_Module\999.0\src\Lugwit_Module\..\pytracemp\src
+[OK] debug 模块导入成功 (相对导入)
+[ThreadSafe库] 版本 1.1.0 初始化完成
+[ThreadSafe库] 模块状态: Dispatcher=True, Helper=True, Sync=True, Pool=True, Locks=True
+[ThreadSafe库] 所有模块加载成功
+<module 'l_thread_safe' from 'D:\\TD_Depot\\Software\\Lugwit_syncPlug\\lugwit_insapp\\trayapp\\rez-package-source\\l_thread_safe\\999.0\\src\\l_thread_safe\\__init__.py'>
+路径解析
+  PASS  笔记条目 → 磁盘路径
+  PASS  外部文件条目 → 磁盘路径
+  PASS  IPC 文件条目 → 磁盘路径
+  PASS  文件夹/未知条目 → None
+  PASS  笔记无标题 → None
+资源管理器定位（monkeypatch Popen，不真的开窗口）
+  PASS  存在的文件 → /select 定位
+  PASS  文件夹 → 直接打开目录
+  PASS  文件已删除 → 退到父目录
+外部修改检测（笔记文件，此前只对 .log 生效）
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 记录快照 path=C:\Users\WB0636~1.FEN\AppData\Local\Temp\lnp_ext_4blfm4wj\笔记A.md mtime=1789229695.4582093 size=12"   ----code_context : lprint(
+            f"[本地文件监控] 记录快照 path={target} "
+            f"mtime={self._loaded_local_file_mtime} size={self._loaded_local_file_size}"
+        ) 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4844, -fn: _record_loaded_local_file, 打印次数: 1/4, thread_name=MainThread, is_main_thread=True   
+
+  PASS  记录快照
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 检测到外部修改 source=窗口激活 path=C:\Users\WB0636~1.FEN\AppData\Local\Temp\lnp_ext_4blfm4wj\笔记A.md mtime=1789229695.4582093->1789229700.4761066 size=12->21 dirty=False"   ----code_context : lprint(
+            f"[本地文件监控] 检测到外部修改 source={source} path={target} "
+            f"mtime={last_mtime}->{mtime} size={last_size}->{size} dirty={dirty}"
+        ) 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4932, -fn: _check_local_file_changed, 打印次数: 1/4, thread_name=MainThread, is_main_thread=True   
+
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 提示结果 source=窗口激活 ret=16384"   ----code_context : lprint(f"[本地文件监控] 提示结果 source={source} ret={int(ret)}") 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4955, -fn: _check_local_file_changed, 打印次数: 1/4, thread_name=MainThread, is_main_thread=True   
+
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 记录快照 path=C:\Users\WB0636~1.FEN\AppData\Local\Temp\lnp_ext_4blfm4wj\笔记A.md mtime=1789229700.4761066 size=21"   ----code_context : lprint(
+            f"[本地文件监控] 记录快照 path={target} "
+            f"mtime={self._loaded_local_file_mtime} size={self._loaded_local_file_size}"
+        ) 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4844, -fn: _record_loaded_local_file, 打印次数: 2/4, thread_name=MainThread, is_main_thread=True   
+
+  PASS  弹窗提示已触发
+  PASS  提示含文件名
+  PASS  重载为磁盘新内容
+  PASS  重载后记为干净
+无变化时不打扰
+  PASS  mtime 未变 → 不提示
+编辑器有未保存改动时也提示（旧实现直接静默跳过）
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 检测到外部修改 source=窗口激活 path=C:\Users\WB0636~1.FEN\AppData\Local\Temp\lnp_ext_4blfm4wj\笔记A.md mtime=1789229700.4761066->1789229755.4848583 size=21->18 dirty=True"   ----code_context : lprint(
+            f"[本地文件监控] 检测到外部修改 source={source} path={target} "
+            f"mtime={last_mtime}->{mtime} size={last_size}->{size} dirty={dirty}"
+        ) 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4932, -fn: _check_local_file_changed, 打印次数: 2/4, thread_name=MainThread, is_main_thread=True   
+
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 提示结果 source=窗口激活 ret=65536"   ----code_context : lprint(f"[本地文件监控] 提示结果 source={source} ret={int(ret)}") 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4955, -fn: _check_local_file_changed, 打印次数: 2/4, thread_name=MainThread, is_main_thread=True   
+
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 记录快照 path=C:\Users\WB0636~1.FEN\AppData\Local\Temp\lnp_ext_4blfm4wj\笔记A.md mtime=1789229755.4848583 size=18"   ----code_context : lprint(
+            f"[本地文件监控] 记录快照 path={target} "
+            f"mtime={self._loaded_local_file_mtime} size={self._loaded_local_file_size}"
+        ) 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4844, -fn: _record_loaded_local_file, 打印次数: 3/4, thread_name=MainThread, is_main_thread=True   
+
+  PASS  dirty 时不再静默跳过
+服务器日志/问AI 不参与本地文件检测
+  PASS  服务器日志 → 无本地文件
+  PASS  问AI → 无本地文件
+外部文件路径也纳入检测
+  PASS  外部文件 → 有本地文件
+文件监视 / 轮询挂钩
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 记录快照 path=C:\Users\WB0636~1.FEN\AppData\Local\Temp\lnp_ext_4blfm4wj\笔记A.md mtime=1789229755.4848583 size=18"   ----code_context : lprint(
+            f"[本地文件监控] 记录快照 path={target} "
+            f"mtime={self._loaded_local_file_mtime} size={self._loaded_local_file_size}"
+        ) 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4844, -fn: _record_loaded_local_file, 打印次数: 4/4, thread_name=MainThread, is_main_thread=True   
+
+  PASS  监视文件本身
+  PASS  同时监视父目录（兼容原子替换写盘）
+  PASS  轮询已启动
+  PASS  无本地文件时停止轮询
+  PASS  无本地文件时清空监视
+  PASS  问AI 无本地文件
+窗口不在前台时后台轮询不弹模态框
+  PASS  后台轮询静默
+轮询发现外部修改（源文件监视之外的兜底路径）
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 检测到外部修改 source=轮询 path=C:\Users\WB0636~1.FEN\AppData\Local\Temp\lnp_ext_4blfm4wj\笔记A.md mtime=1.0->1789229815.51182 size=18->24 dirty=False"   ----code_context : lprint(
+            f"[本地文件监控] 检测到外部修改 source={source} path={target} "
+            f"mtime={last_mtime}->{mtime} size={last_size}->{size} dirty={dirty}"
+        ) 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4932, -fn: _check_local_file_changed, 打印次数: 3/4, thread_name=MainThread, is_main_thread=True   
+
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 提示结果 source=轮询 ret=16384"   ----code_context : lprint(f"[本地文件监控] 提示结果 source={source} ret={int(ret)}") 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4955, -fn: _check_local_file_changed, 打印次数: 3/4, thread_name=MainThread, is_main_thread=True   
+
+  PASS  轮询提示重载
+  PASS  轮询重载内容
+文件监视事件同样触发检测
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 检测到外部修改 source=文件监视 path=C:\Users\WB0636~1.FEN\AppData\Local\Temp\lnp_ext_4blfm4wj\笔记A.md mtime=1789229815.51182->1789229995.5356574 size=24->24 dirty=False"   ----code_context : lprint(
+            f"[本地文件监控] 检测到外部修改 source={source} path={target} "
+            f"mtime={last_mtime}->{mtime} size={last_size}->{size} dirty={dirty}"
+        ) 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4932, -fn: _check_local_file_changed, 打印次数: 4/4, thread_name=MainThread, is_main_thread=True   
+
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 提示结果 source=文件监视 ret=16384"   ----code_context : lprint(f"[本地文件监控] 提示结果 source={source} ret={int(ret)}") 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4955, -fn: _check_local_file_changed, 打印次数: 4/4, thread_name=MainThread, is_main_thread=True   
+
+  PASS  监视事件提示重载
+  PASS  监视事件重载内容
+编辑器有未保存改动 → 仍提示（明确告知会丢弃）
+  PASS  dirty 也提示
+  PASS  提示说明会丢弃未保存修改
+  PASS  选否则保留编辑内容
+  PASS  选否后刷新快照不再重复提示
+外部删除文件
+[2026-09-13 00:14:55] {WARNING}
+[arg0] "[本地文件监控] 文件已不存在 path=C:\Users\WB0636~1.FEN\AppData\Local\Temp\lnp_ext_4blfm4wj\笔记A.md"   ----code_context : lprint(f"[本地文件监控] 文件已不存在 path={target}") 
+File: D:\TD_Depot\Software\Lugwit_syncPlug\lugwit_insapp\trayapp\rez-package-source\l_notepad_client\999.0\src\l_notepad_client\ui.py:4918, -fn: _check_local_file_changed, 打印次数: 1/4, thread_name=MainThread, is_main_thread=True   
+

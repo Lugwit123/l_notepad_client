@@ -8,6 +8,7 @@ import ctypes.wintypes
 import json
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Callable
@@ -21,9 +22,24 @@ BUTTON_MSGS = {
     "left": {"down": 0x0201, "name": "左键", "vk": 0x01},
 }
 
+# 剪贴板历史的鼠标「备用入口」：Shift + 中键。
+# 固定用中键、不跟随 hotkey_button 配置 —— 这样「Ctrl+鼠标=收藏面板」无论被设成
+# 中键还是左键，都不会和它撞车。存在意义：远控/云桌面下键盘快捷键可能被控制端
+# 拦掉或走别的注入通道，而鼠标事件实测是可靠转发的（钩子里旁听，不吞按键）。
+CLIPBOARD_BTN_VK = BUTTON_MSGS["middle"]["vk"]        # 0x04 VK_MBUTTON
+CLIPBOARD_BTN_DOWN = BUTTON_MSGS["middle"]["down"]    # 0x0207 WM_MBUTTONDOWN
+CLIPBOARD_BTN_NAME = BUTTON_MSGS["middle"]["name"]
+
 WH_MOUSE_LL = 14
 WH_KEYBOARD_LL = 13
 GIT_HTTP_CONNECT_TIMEOUT_SEC = 5
+QS_ALLINPUT = 0x04FF
+PM_REMOVE = 0x0001
+# 用来标记「我们自己 keybd_event 补发」的按键（写在 KBDLLHOOKSTRUCT.dwExtraInfo）。
+# 关键：不能用 LLKHF_INJECTED 来区分敌我——远控（网易UU远程/Windows App/mstsc）、
+# 自动化脚本的键鼠输入同样带 LLKHF_INJECTED，一刀切跳过会让 Win+V 在远控会话里
+# 彻底失效（而鼠标那条路径没这个过滤，所以 Ctrl+中键一直好用）。
+INJECT_MAGIC = 0x4C4E4F54          # 'LNOT'
 
 
 class KBDLLHOOKSTRUCT(ctypes.Structure):
@@ -32,7 +48,7 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
         ("scanCode", ctypes.c_ulong),
         ("flags", ctypes.c_ulong),
         ("time", ctypes.c_ulong),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ("dwExtraInfo", ctypes.c_void_p),   # 读成整数用：区分自己补发的按键（见 INJECT_MAGIC）
     ]
 
 logger = logging.getLogger(__name__)
@@ -100,6 +116,30 @@ if _on_windows:
     _user32.UnhookWindowsHookEx.restype = ctypes.wintypes.BOOL
     _kernel32.GetModuleHandleW.argtypes = [ctypes.wintypes.LPCWSTR]
     _kernel32.GetModuleHandleW.restype = ctypes.wintypes.HMODULE
+    # 钩子线程自己的消息泵（GlobalKeyboardWinVHotkey._thread_main）
+    _user32.MsgWaitForMultipleObjects.argtypes = [
+        ctypes.wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.wintypes.BOOL,
+        ctypes.wintypes.DWORD,
+        ctypes.wintypes.DWORD,
+    ]
+    _user32.MsgWaitForMultipleObjects.restype = ctypes.wintypes.DWORD
+    _user32.PeekMessageW.argtypes = [
+        ctypes.POINTER(ctypes.wintypes.MSG),
+        ctypes.c_void_p,
+        ctypes.wintypes.UINT,
+        ctypes.wintypes.UINT,
+        ctypes.wintypes.UINT,
+    ]
+    _user32.PeekMessageW.restype = ctypes.wintypes.BOOL
+    # 第 4 参 dwExtraInfo 是 ULONG_PTR：必须声明，否则 64 位下 INJECT_MAGIC 传不对
+    _user32.keybd_event.argtypes = [
+        ctypes.wintypes.BYTE,
+        ctypes.wintypes.BYTE,
+        ctypes.wintypes.DWORD,
+        ctypes.wintypes.WPARAM,
+    ]
 else:
     _user32 = None
     _kernel32 = None
@@ -107,12 +147,15 @@ else:
 
 
 class GlobalMouseMonitor(QtCore.QObject):
-    """全局鼠标监控器，用于检测 Ctrl+中键/左键。"""
+    """全局鼠标监控器：Ctrl+中键/左键 → 收藏面板；Shift+中键 → 剪贴板历史（备用入口）。"""
 
-    triggered = QtCore.Signal()
+    triggered = QtCore.Signal()             # Ctrl+鼠标 → 文件夹收藏面板
+    clipboard_triggered = QtCore.Signal()   # Shift+中键 → 剪贴板历史弹窗
 
     VK_LCONTROL = 0xA2
     VK_RCONTROL = 0xA3
+    VK_LSHIFT = 0xA0
+    VK_RSHIFT = 0xA1
 
     def __init__(self, trigger_button: str = "middle", parent=None) -> None:
         super().__init__(parent)
@@ -124,6 +167,8 @@ class GlobalMouseMonitor(QtCore.QObject):
         self._hook_handle = None
         self._hook_proc_ref = None
         self._last_trigger_time = 0.0
+        self._last_clip_time = 0.0          # Shift+中键 去抖（与 Ctrl 的分开计）
+        self._mbtn_was_down = False         # 中键下降沿跟踪（轮询备用路径用）
         self._last_ctrl_log_time = 0.0
         self._last_heartbeat_time = 0.0
         self._trigger_button = "middle"
@@ -171,17 +216,26 @@ class GlobalMouseMonitor(QtCore.QObject):
             self._hook_handle = None
 
     def _mouse_ll_proc(self, n_code, w_param, l_param):
-        if n_code >= 0 and w_param == self._btn_down_msg:
-            ctrl_down = bool(
-                (_user32.GetAsyncKeyState(self.VK_LCONTROL) & 0x8000)
-                or (_user32.GetAsyncKeyState(self.VK_RCONTROL) & 0x8000)
-            )
-            if ctrl_down:
-                now = time.time()
-                if now - self._last_trigger_time > 0.2:
-                    self._last_trigger_time = now
-                    _safe_log(f"Ctrl+{self._btn_name} 已触发", logging.INFO)
-                    self.triggered.emit()
+        # 只在关心的两个「按下」消息上查修饰键状态：鼠标移动事件每秒上百个，
+        # 每次多两次 GetAsyncKeyState 是没必要的开销（钩子回调必须够快）。
+        if n_code >= 0 and (w_param == self._btn_down_msg
+                            or w_param == CLIPBOARD_BTN_DOWN):
+            shift_down = self._shift_down()
+            # Shift+中键 → 剪贴板历史（备用入口，固定中键）
+            if w_param == CLIPBOARD_BTN_DOWN and shift_down:
+                self._fire_clipboard(f"Shift+{CLIPBOARD_BTN_NAME} 已触发")
+            # Ctrl+鼠标 → 收藏面板；按着 Shift 时让位给上面那条
+            elif w_param == self._btn_down_msg:
+                ctrl_down = bool(
+                    (_user32.GetAsyncKeyState(self.VK_LCONTROL) & 0x8000)
+                    or (_user32.GetAsyncKeyState(self.VK_RCONTROL) & 0x8000)
+                )
+                if ctrl_down:
+                    now = time.time()
+                    if now - self._last_trigger_time > 0.2:
+                        self._last_trigger_time = now
+                        _safe_log(f"Ctrl+{self._btn_name} 已触发", logging.INFO)
+                        self.triggered.emit()
         return _user32.CallNextHookEx(self._hook_handle, n_code, w_param, l_param)
 
     def _poll(self) -> None:
@@ -206,6 +260,14 @@ class GlobalMouseMonitor(QtCore.QObject):
                 _safe_log("Ctrl+鼠标 快捷键已触发（轮询备用）", logging.INFO)
                 self.triggered.emit()
 
+        # Shift+中键 的轮询兜底：按「中键下降沿 + Shift 按住」判断，与钩子同一套语义
+        # （钩子若被系统摘掉或漏事件，这条仍能兜住）
+        mbtn_down = bool(_user32.GetAsyncKeyState(CLIPBOARD_BTN_VK) & 0x8000)
+        if mbtn_down and not self._mbtn_was_down and self._shift_down():
+            self._fire_clipboard(
+                f"Shift+{CLIPBOARD_BTN_NAME} 已触发（轮询备用）")
+        self._mbtn_was_down = mbtn_down
+
         if now - self._last_heartbeat_time > 60.0:
             self._last_heartbeat_time = now
             _safe_log(
@@ -215,6 +277,22 @@ class GlobalMouseMonitor(QtCore.QObject):
 
         self._ctrl_was_down = ctrl_down
 
+    def _shift_down(self) -> bool:
+        """Shift 是否物理按住（左右分开查：GetAsyncKeyState 不认 VK_SHIFT 这个合并码）。"""
+        return bool(
+            (_user32.GetAsyncKeyState(self.VK_LSHIFT) & 0x8000)
+            or (_user32.GetAsyncKeyState(self.VK_RSHIFT) & 0x8000)
+        )
+
+    def _fire_clipboard(self, label: str) -> None:
+        """发剪贴板历史事件（0.2s 去抖：中键连点、钩子与轮询重复都只算一次）。"""
+        now = time.time()
+        if now - self._last_clip_time <= 0.2:
+            return
+        self._last_clip_time = now
+        _safe_log(label, logging.INFO)
+        self.clipboard_triggered.emit()
+
     def set_trigger_button(self, button: str) -> None:
         button = button if button in BUTTON_MSGS else "middle"
         self._trigger_button = button
@@ -222,7 +300,11 @@ class GlobalMouseMonitor(QtCore.QObject):
         self._btn_down_msg = info["down"]
         self._btn_name = info["name"]
         self._btn_vk = info["vk"]
-        _safe_log(f"触发按钮已切换为: Ctrl+{self._btn_name}", logging.INFO)
+        _safe_log(
+            f"触发按钮已切换为: Ctrl+{self._btn_name}；"
+            f"剪贴板历史备用入口: Shift+{CLIPBOARD_BTN_NAME}",
+            logging.INFO,
+        )
 
 
 class GlobalKeyboardWinVHotkey(QtCore.QObject):
@@ -230,8 +312,9 @@ class GlobalKeyboardWinVHotkey(QtCore.QObject):
 
     策略：Win 键按下即吞掉（系统收不到 Win，不弹开始菜单），
     Win 按住期间按下 V 则触发剪贴板历史回调并吞掉 V。
-    注意：触发回调必须延迟到事件循环执行——钩子回调内同步做重活会超过
-    LowLevelHooksTimeout，Windows 将直接放行该 V 按下（前台程序收到裸 V）。
+    线程：钩子跑在**独立线程**（见 _thread_main），该线程只做消息泵 + 看门狗；
+    回调里只吞键并 emit 信号（跨线程自动排队到主线程），弹窗等重活全在主线程做——
+    回调一旦超过 LowLevelHooksTimeout，Windows 会静默摘掉整个钩子，热键就再也不响应。
     副作用：Win 单独键 / Win+其它组合键将不再触发系统功能（覆盖 Win+V 的取舍）。
     """
 
@@ -264,48 +347,113 @@ class GlobalKeyboardWinVHotkey(QtCore.QObject):
         self._win_used_for_winv = False     # 本次 Win 是否已用于 Win+V（全程吞掉，不补发）
         self._v_held = False                # V 当前是否处于按住状态（长按自动重复 keydown 去重）
         self._v_up_to_swallow = 0           # 待吞掉的 V keyup 计数（与吞掉的 V down 配对）
+        self._injected_noted = False        # 首次遇到「别人注入」的按键时记一条日志（只记一次）
         self._win_press_time = 0.0          # 物理 Win 按下时间戳（看门狗用）
-        self._win_timeout = 1.5             # 超过该秒数仍为 win_down → 判定 up 事件丢失，兜底复位
+        # 超过该秒数仍为 win_down → 判定 Win 抬起事件丢失，兜底复位。
+        # 为什么必须给得足够大：Win 按下被本钩子吞掉后系统收不到 Win（开始菜单不弹），
+        # 用户「按住 Win 想一下再按 V」很常见；而实测（吞掉 keydown 后立刻以及 300ms 后
+        # 查 GetAsyncKeyState，高位都是 0）**拿不到被吞掉的 Win 的物理状态**，
+        # 超时是唯一可用信号。之前 1.5s 会在正常手势中途提前清掉 _win_down，
+        # 导致紧随其后的 V 被当成「裸 V」放给前台程序 → Win+V 静默失效（还多打出一个 v）。
+        self._win_timeout = 8.0
         self._last_trigger_time = 0.0
-        # 超时看门狗：兜底「物理 Win 抬起事件丢失」导致的 Win 键卡住
-        self._watchdog = QtCore.QTimer(self)
-        self._watchdog.setInterval(500)
-        self._watchdog.timeout.connect(self._watchdog_tick)
+        # 钩子装在独立线程上（见 _thread_main）：LL 钩子回调只派发给安装它的线程，
+        # 且必须在 LowLevelHooksTimeout 内返回，否则 Windows 会**静默摘掉整个钩子**。
+        # 装在 Qt 主线程时，主线程任何一次 >300ms 的卡顿（HTTP/扫盘/重布局）都会把热键
+        # 打死且无法自愈；独立线程只跑消息泵 + 看门狗，不受 UI 影响。
+        # 看门狗也从 QTimer 挪进该线程（状态只被它碰，无需加锁）。
+        self._thread: threading.Thread | None = None
+        self._stop_flag = False
+        self._installed = threading.Event()
+        self._install_ok = False
+        self._pump_timeout_ms = 500         # 消息泵阻塞超时 = 看门狗检查间隔
 
     def start(self) -> bool:
-        """安装低级键盘钩子（WH_KEYBOARD_LL）并启动看门狗。"""
+        """在独立线程里安装低级键盘钩子（WH_KEYBOARD_LL），并起消息泵 + 看门狗。"""
         if not _on_windows:
             return False
-        self._hook_proc_ref = HOOKPROC(self._kb_ll_proc)
-        h_mod = _kernel32.GetModuleHandleW(None)
-        try:
-            self._hook_handle = _user32.SetWindowsHookExW(
-                WH_KEYBOARD_LL, self._hook_proc_ref, h_mod, 0)
-        except Exception:
-            self._hook_handle = None
-        if self._hook_handle:
-            _safe_log(
-                f"WH_KEYBOARD_LL 钩子已安装 (Win+V 接管, handle={self._hook_handle})",
-                logging.INFO,
-            )
-        self._watchdog.start()
-        return bool(self._hook_handle)
+        if self._thread is not None and self._thread.is_alive():
+            return self._install_ok
+        self._stop_flag = False
+        self._install_ok = False
+        self._installed.clear()
+        self._thread = threading.Thread(
+            target=self._thread_main, name="WinVHotkeyHook", daemon=True)
+        self._thread.start()
+        # 等安装结果：失败也要尽快返回 False，别让调用方干等
+        self._installed.wait(2.0)
+        return self._install_ok
 
     def stop(self) -> None:
-        self._watchdog.stop()
-        if self._hook_handle:
-            try:
-                _user32.UnhookWindowsHookEx(self._hook_handle)
-            except Exception:
-                pass
+        """停消息泵；钩子由线程自己卸（卸钩子应由安装它的线程执行）。"""
+        self._stop_flag = True
+        th, self._thread = self._thread, None
+        if th is not None and th.is_alive():
+            th.join(timeout=2.0)
+        self._hook_handle = None
+
+    def _thread_main(self) -> None:
+        """钩子线程主体：装钩子 → 抽消息（顺带跑看门狗）→ 卸钩子。"""
+        try:
+            self._hook_proc_ref = HOOKPROC(self._kb_ll_proc)   # 必须保活
+            h_mod = _kernel32.GetModuleHandleW(None)
+            self._hook_handle = _user32.SetWindowsHookExW(
+                WH_KEYBOARD_LL, self._hook_proc_ref, h_mod, 0)
+        except Exception as exc:
             self._hook_handle = None
+            _safe_log(f"SetWindowsHookExW 异常: {exc}", logging.WARNING)
+        self._install_ok = bool(self._hook_handle)
+        if self._install_ok:
+            _safe_log(
+                f"WH_KEYBOARD_LL 钩子已安装 (Win+V 接管, 独立线程, "
+                f"handle={self._hook_handle})",
+                logging.INFO,
+            )
+        else:
+            _safe_log("WH_KEYBOARD_LL 钩子安装失败，Win+V 热键不可用", logging.WARNING)
+        self._installed.set()          # 先放行调用方，再进消息泵
+        if not self._install_ok:
+            return
+
+        msg = ctypes.wintypes.MSG()
+        try:
+            while not self._stop_flag:
+                # 阻塞等消息（不占 CPU）；超时点正好当看门狗检查点
+                _user32.MsgWaitForMultipleObjects(
+                    0, None, False, self._pump_timeout_ms, QS_ALLINPUT)
+                while _user32.PeekMessageW(
+                        ctypes.byref(msg), None, 0, 0, PM_REMOVE):
+                    _user32.TranslateMessage(ctypes.byref(msg))
+                    _user32.DispatchMessageW(ctypes.byref(msg))
+                self._watchdog_tick()
+        except Exception as exc:
+            _safe_log(f"Win+V 钩子线程异常退出: {exc}", logging.ERROR)
+        finally:
+            if self._hook_handle:
+                try:
+                    _user32.UnhookWindowsHookEx(self._hook_handle)
+                except Exception:
+                    pass
+                self._hook_handle = None
+                _safe_log("WH_KEYBOARD_LL 钩子已卸载", logging.INFO)
 
     def _watchdog_tick(self) -> None:
-        """看门狗：若 Win 按下超过阈值仍无 up，判定物理 up 事件丢失，兜底补发 up 并复位。"""
+        """看门狗：Win 按下超过阈值仍无 up → 判定抬起事件丢失，兜底补发 up 并复位。
+
+        由钩子线程的消息泵每 _pump_timeout_ms 调一次（不再是主线程的 QTimer）——
+        状态只被这一个线程碰，所以不需要加锁；也不会因为 UI 卡顿而漏检。
+        """
         if not self._win_down:
             return
         if time.time() - self._win_press_time <= self._win_timeout:
             return
+        # 走到这里说明 Win 按下后 8 秒内一条相关按键都没收到：要么 up 事件真丢了，
+        # 要么钩子已被系统摘掉（回调超 LowLevelHooksTimeout 会被静默卸载）。
+        # 留痕，便于下次排查「Win+V 不生效」到底是哪一类。
+        _safe_log(
+            f"Win 抬起事件疑似丢失（按住超过 {self._win_timeout}s）：兜底复位 Win 状态",
+            logging.WARNING,
+        )
         # 物理 Win 可能早已抬起但 up 事件丢失
         if self._win_compensated:
             # 曾补发过 Win down：必须补发 up 配对，否则系统认为 Win 一直按住
@@ -315,10 +463,15 @@ class GlobalKeyboardWinVHotkey(QtCore.QObject):
         self._win_used_for_winv = False
 
     def _send_key(self, vk: int, keyup: bool = False) -> None:
-        """把之前吞掉的 Win 键重新注入系统（keybd_event 注入输入带 LLKHF_INJECTED，钩子会放行不递归）。"""
+        """把之前吞掉的 Win 键重新注入系统。
+
+        注入的按键带 LLKHF_INJECTED + dwExtraInfo=INJECT_MAGIC，钩子据此认出
+        「这是自己补发的」并放行（避免递归）；别人的注入输入（远控/自动化）没有这个
+        标记，照常走 Win+V 逻辑。
+        """
         flags = 0x0002 if keyup else 0  # KEYEVENTF_KEYUP
         try:
-            _user32.keybd_event(vk, 0, flags, 0)
+            _user32.keybd_event(vk, 0, flags, INJECT_MAGIC)
         except Exception:
             pass
 
@@ -327,10 +480,19 @@ class GlobalKeyboardWinVHotkey(QtCore.QObject):
             kb = ctypes.cast(
                 l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
             vk = int(kb.vkCode)
-            # 我们自己注入补发的按键（LLKHF_INJECTED）直接放行，避免递归
+            # 只放行「我们自己补发」的按键（带 INJECT_MAGIC），不能一刀切跳过所有注入键：
+            # 远控/自动化的键鼠输入同样带 LLKHF_INJECTED，全跳过就等于 Win+V 在远控会话里
+            # 永不生效（鼠标那条路径没有这个过滤，所以 Ctrl+中键一直好用——症状即由此而来）。
             if int(kb.flags) & self.LLKHF_INJECTED:
-                return _user32.CallNextHookEx(
-                    self._hook_handle, n_code, w_param, l_param)
+                if int(kb.dwExtraInfo or 0) == INJECT_MAGIC:
+                    return _user32.CallNextHookEx(
+                        self._hook_handle, n_code, w_param, l_param)
+                if not self._injected_noted:
+                    self._injected_noted = True
+                    _safe_log(
+                        "承接注入输入（远控/自动化）：Win+V 逻辑对注入键同样生效",
+                        logging.INFO,
+                    )
             if w_param in (self.WM_KEYDOWN, self.WM_SYSKEYDOWN):
                 if vk in (self.VK_LWIN, self.VK_RWIN):
                     # 先吞掉 Win 按下，稍后按实际组合决定是否补发回系统
@@ -343,7 +505,8 @@ class GlobalKeyboardWinVHotkey(QtCore.QObject):
                     # 任何 Win+V（含 Ctrl/Alt+Win+V）都吞掉并标记本次 Win 用于剪贴板相关，
                     # 避免 Win up 时误补发弹开始菜单；仅无 Ctrl/Alt 时触发弹窗
                     self._win_used_for_winv = True
-                    if not self._v_held:
+                    fresh_press = not self._v_held
+                    if fresh_press:
                         self._v_held = True
                         # 记录一次待吞的 V keyup：抬起时配对吞掉，
                         # 避免前台程序收到无 down 配对的孤立 V 抬起
@@ -352,15 +515,18 @@ class GlobalKeyboardWinVHotkey(QtCore.QObject):
                         _user32.GetAsyncKeyState(self.VK_CONTROL) & 0x8000)
                     alt = bool(
                         _user32.GetAsyncKeyState(self.VK_MENU) & 0x8000)
-                    if not ctrl and not alt:
-                        now = time.time()
-                        if now - self._last_trigger_time > 0.3:
-                            self._last_trigger_time = now
-                            _safe_log("Win+V 已触发（剪贴板历史）", logging.INFO)
-                            # 关键：WH_KEYBOARD_LL 回调必须在 LowLevelHooksTimeout 内返回，
-                            # 否则 Windows 直接放行本次 V 按下（前台程序收到裸 V）。
-                            # 弹窗创建/布局等重活延迟到事件循环执行，确保吞键生效。
-                            QtCore.QTimer.singleShot(0, self.triggered.emit)
+                    # 只在「本次是新按下」时触发：长按 V 的自动重复由 fresh_press 挡掉。
+                    # 刻意不再叠一层 0.3s 时间防抖——V 已经被吞掉了，「只吞不触发」就是
+                    # 纯静默失效（用户按快一点会以为热键坏了）；而重复触发只是让弹窗
+                    # 重新摆一次位置，代价远小于「按了没反应」。
+                    if fresh_press and not ctrl and not alt:
+                        self._last_trigger_time = time.time()
+                        _safe_log("Win+V 已触发（剪贴板历史）", logging.INFO)
+                        # 回调必须在 LowLevelHooksTimeout 内返回，否则 Windows 直接放行
+                        # 本次 V 按下（前台程序收到裸 V）。emit 只是往主线程投一个事件
+                        # （接收者在主线程 → 自动排队连接），弹窗创建/布局都在主线程做，
+                        # 这里不阻塞；也不再依赖「回调恰好跑在主线程」这个前提。
+                        self.triggered.emit()
                     return 1  # 吞掉 V，阻止系统剪贴板历史
                 if vk == self.VK_V:
                     # 裸 V 按下（未按住 Win）：清除残留吞键状态，避免误吞本次 V 的 keyup
@@ -407,6 +573,8 @@ class FolderFavoritesHotkeyService(QtCore.QObject):
     failed = QtCore.Signal(str)
     # Win+V：接管系统剪贴板历史，弹出 l_notepad 自己的「剪贴板历史」小窗口
     win_v_triggered = QtCore.Signal()
+    # Shift+中键：剪贴板历史的鼠标备用入口（与 Win+V 弹同一个窗口）
+    clipboard_triggered = QtCore.Signal()
 
     def __init__(self, parent: QtCore.QObject | None = None) -> None:
         super().__init__(parent)
@@ -425,6 +593,8 @@ class FolderFavoritesHotkeyService(QtCore.QObject):
         button = load_hotkey_button()
         self._monitor = GlobalMouseMonitor(trigger_button=button)
         self._monitor.triggered.connect(on_triggered)
+        # Shift+中键 → 剪贴板历史（备用入口）：转发成服务自己的信号给业务侧接
+        self._monitor.clipboard_triggered.connect(self.clipboard_triggered)
         ok = bool(self._monitor.start())
         self.started.emit(ok)
         if not ok:

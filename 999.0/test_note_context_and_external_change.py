@@ -371,6 +371,47 @@ check("端到端：预览层已重渲染",
       repr(preview.current_markdown()) if preview else "no preview")
 check("端到端：重载后为干净态", win6.state.dirty is False)
 
+print("端到端：重载后保留滚动位置（重载会重建 document，Qt 会把滚动条复位）")
+big = tmp / "长预览.md"
+big_lines = [f"第 {i} 行内容" for i in range(1, 201)]
+big.write_text("\n".join(big_lines) + "\n", encoding="utf-8")
+win7 = make_window(tmp, "长预览.md")
+editor7 = CodeEditorWidget(win7)
+editor7.resize(600, 400)
+editor7.show()
+app.processEvents()
+editor7.load_text_file_cached(big, mode="markdown_preview")
+app.processEvents()
+win7.content_edit = editor7
+win7._record_loaded_local_file(big)
+bar7 = win7._visible_editor_scroll_area(editor7).verticalScrollBar()
+bar7.setValue(int(bar7.maximum() * 0.5))
+app.processEvents()
+before_ratio = bar7.value() / bar7.maximum() if bar7.maximum() else 0.0
+check("前置：长文件已可滚动", bar7.maximum() > 0, str(bar7.maximum()))
+
+_time.sleep(0.01)
+big_lines[99] = "第 100 行内容（外部改过）"
+big.write_text("\n".join(big_lines) + "\n", encoding="utf-8")
+os.utime(big, (_time.time() + 1500, _time.time() + 1500))
+_force_active(win7)
+answered.clear()
+orig_q = QtWidgets.QMessageBox.question
+QtWidgets.QMessageBox.question = staticmethod(
+    lambda *a, **k: (answered.append("prompt"), QtWidgets.QMessageBox.StandardButton.Yes)[1]
+)
+try:
+    win7._on_local_file_watch_event(str(big))
+finally:
+    QtWidgets.QMessageBox.question = orig_q
+app.processEvents()
+bar7 = win7._visible_editor_scroll_area(editor7).verticalScrollBar()
+after_ratio = bar7.value() / bar7.maximum() if bar7.maximum() else 0.0
+check("重载后内容已更新", "外部改过" in editor7.toPlainText(), repr(editor7.toPlainText()[:60]))
+check("重载后滚动位置保留",
+      abs(after_ratio - before_ratio) < 0.05,
+      f"before={before_ratio:.3f} after={after_ratio:.3f}")
+
 print("右键菜单：打开所在文件夹 / 复制文件路径 / 复制所在文件夹")
 win_menu = make_window(tmp, "笔记A.md")
 menu_actions: list[str] = []

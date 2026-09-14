@@ -1123,8 +1123,29 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
         # （如正在编辑的 item 因 focusOut 退出编辑模式回预览）。
         # 点击弹窗仍会自然激活，之后由原 focusOut 自动隐藏逻辑接管。
         self._watch_fg_hwnd = self._get_foreground_hwnd()
-        self._watch_btn_down = False
+        # 打开那一刻若已有鼠标键按着，必须记成「本来就按着」：Shift+中键 正是这种情形——
+        # 弹窗在中键「按下」沿弹出、手指还按着中键，而弹窗又刻意停在光标旁（避开光标 28px），
+        # 于是首次轮询会把这次按下当成新的「点到别处」→ 立刻 hide（表现为闪现）。
+        self._watch_btn_down = self._any_button_down()
         self._watch_timer.start()
+
+    @staticmethod
+    def _any_button_down() -> bool:
+        """是否有鼠标键处于按住状态（左/右/中）。
+
+        「点击别处即隐藏」的判断要用它两次：打开弹窗时记录初始状态、轮询时比下降沿。
+        必须是同一份实现，否则两处对「按着没按着」的判断会不一致。
+        """
+        if sys.platform != "win32":
+            return False
+        try:
+            user32 = ctypes.windll.user32
+            return any(
+                bool(user32.GetAsyncKeyState(vk) & 0x8000)
+                for vk in (0x01, 0x02, 0x04)   # 左 / 右 / 中
+            )
+        except Exception:
+            return False
 
     def _move_near_cursor(self, pos: QtCore.QPoint) -> None:
         """在光标旁摆放弹窗并避免遮挡光标。
@@ -1375,9 +1396,7 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
                     return
             # 任一鼠标键按下沿：点击点不在弹窗（含悬停预览层）内 → 隐藏；
             # 点在弹窗内则交给 Windows 自然激活本窗口（键盘操作随之可用）
-            btn_down = any(
-                user32.GetAsyncKeyState(vk) & 0x8000
-                for vk in (0x01, 0x02, 0x04))
+            btn_down = self._any_button_down()
             if btn_down and not self._watch_btn_down:
                 pt = ctypes.wintypes.POINT()
                 user32.GetCursorPos.argtypes = [

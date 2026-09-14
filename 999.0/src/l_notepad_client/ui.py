@@ -4960,6 +4960,47 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             return
         self._reload_local_file_from_disk(target)
 
+    def _visible_editor_scroll_area(self, editor):
+        """返回当前可见的滚动区域。
+
+        markdown 预览态下可见的是独立预览层（编辑区被 hide），滚动位置必须从它身上取。
+        """
+        is_preview = getattr(editor, "is_markdown_preview_mode", None)
+        if not (callable(is_preview) and is_preview()):
+            return editor
+        inner = editor.editor() if hasattr(editor, "editor") else None
+        preview = getattr(inner, "_preview_view", None)
+        return preview if preview is not None else editor
+
+    def _editor_scroll_ratio(self, editor) -> float:
+        """当前可见滚动区域的垂直滚动比例（0.0 表示在顶部 / 无法滚动）。"""
+        area = self._visible_editor_scroll_area(editor)
+        if not self._qt_is_valid(area):
+            return 0.0
+        bar = area.verticalScrollBar() if hasattr(area, "verticalScrollBar") else None
+        if bar is None:
+            return 0.0
+        maximum = bar.maximum()
+        return 0.0 if maximum <= 0 else bar.value() / maximum
+
+    def _restore_editor_scroll_ratio(self, editor, ratio: float) -> None:
+        """按比例还原滚动位置：重载会重建 document，Qt 会把滚动条复位到顶部。"""
+        if ratio <= 0.0:
+            return
+        area = self._visible_editor_scroll_area(editor)
+        if not self._qt_is_valid(area):
+            return
+
+        def _apply() -> None:
+            if not self._qt_is_valid(area):
+                return
+            bar = area.verticalScrollBar()
+            bar.setValue(max(0, min(int(round(bar.maximum() * ratio)), bar.maximum())))
+
+        # QPlainTextEdit 的 maximum 要等布局完成后才更新，补一次以覆盖该情况。
+        _apply()
+        QtCore.QTimer.singleShot(0, _apply)
+
     def _reload_local_file_from_disk(self, path: Path) -> None:
         """把本地文件（笔记 / 外部文件）重新读入编辑器。"""
         if not self._qt_is_valid(getattr(self, "content_edit", None)):
@@ -4973,6 +5014,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             return
         editor = self.content_edit
         mode = self._mode_from_filename(path.name)
+        scroll_ratio = self._editor_scroll_ratio(editor)
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except Exception as exc:
@@ -5008,6 +5050,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self._set_code_editor_status_text(str(path), size_bytes)
         self._update_title()
         self._sync_version_combo_on_open()
+        self._restore_editor_scroll_ratio(editor, scroll_ratio)
         self.status.showMessage(f"已重载本地文件：{path.name}", 2500)
 
     def changeEvent(self, event) -> None:  # type: ignore[override]

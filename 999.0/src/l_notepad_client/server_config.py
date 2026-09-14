@@ -34,7 +34,8 @@ def _is_prod() -> bool:
     return os.environ.get("Lugwit_deploy", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
-_PROD_PREFIX = "http://121.196.144.88:8080"
+# 生产入口：统一走 443 + 正式证书（域名）；不再使用明文 8080（该端口只监听回环、仅供本机调试）
+_PROD_PREFIX = "https://lugwit.duckdns.org"
 _DEV_PREFIX = "http://127.0.0.1:8080"
 
 
