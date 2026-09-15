@@ -33,6 +33,7 @@ from . import paths
 from .folder_favorites_widget import FolderFavoritesWidget as FolderFavoritesPanel
 from .account_favorites_widget import AccountFavoritesWidget as AccountFavoritesPanel
 from .settings_widget import SettingsWidget
+from .version_diff_dialog import VersionDiffDialog
 from .file_store import sanitize_title_to_filename
 from pytracemp import lprint
 
@@ -147,6 +148,13 @@ _AI_PROMPT_PLACEHOLDER = (
     "支持模型：硅基流动 SiliconFlow / 智谱 Zhipu。"
 )
 _AI_ANSWER_PLACEHOLDER = "AI 回答会显示在这里（支持多会话上下文）"
+
+# 版本行三个下拉框共用（字号偏小，避免撑高整行）
+_VERSION_COMBO_QSS = (
+    "QComboBox { font-size: 10px; padding: 1px 4px; }"
+    "QComboBox QAbstractItemView { font-size: 10px; }"
+    "QComboBox QAbstractItemView::item { padding: 1px 4px; min-height: 16px; }"
+)
 
 
 def _is_ai_prompt_placeholder_body(text: str) -> bool:
@@ -646,14 +654,38 @@ class RightPanel(QtWidgets.QWidget):
         self.combo_version.setObjectName("combo_version")
         self.combo_version.setToolTip("查看并切换到该笔记/日志的历史保存版本")
         self.combo_version.setMinimumWidth(260)
-        self.combo_version.setStyleSheet(
-            "QComboBox#combo_version { font-size: 10px; padding: 1px 4px; }"
-            "QComboBox#combo_version QAbstractItemView { font-size: 10px; }"
-            "QComboBox#combo_version QAbstractItemView::item {"
-            " padding: 1px 4px; min-height: 16px; }"
-        )
+        self.combo_version.setStyleSheet(_VERSION_COMBO_QSS)
         self.combo_version.addItem("📜 切换版本", None)
         version_row.addWidget(self.combo_version)
+
+        # ---- 版本对比：两个版本下拉框 + 对比按钮（默认最新 vs 上一版）
+        self.label_diff = QtWidgets.QLabel("⇄ 差异", self)
+        self.label_diff.setObjectName("label_diff")
+        version_row.addWidget(self.label_diff)
+
+        self.combo_diff_left = QtWidgets.QComboBox(self)
+        self.combo_diff_left.setObjectName("combo_diff_left")
+        self.combo_diff_left.setToolTip("选择「旧」版本（对比基准）")
+        self.combo_diff_left.setMinimumWidth(180)
+        self.combo_diff_left.setStyleSheet(_VERSION_COMBO_QSS)
+        version_row.addWidget(self.combo_diff_left)
+
+        self.label_diff_arrow = QtWidgets.QLabel("→", self)
+        self.label_diff_arrow.setObjectName("label_diff_arrow")
+        version_row.addWidget(self.label_diff_arrow)
+
+        self.combo_diff_right = QtWidgets.QComboBox(self)
+        self.combo_diff_right.setObjectName("combo_diff_right")
+        self.combo_diff_right.setToolTip("选择「新」版本")
+        self.combo_diff_right.setMinimumWidth(180)
+        self.combo_diff_right.setStyleSheet(_VERSION_COMBO_QSS)
+        version_row.addWidget(self.combo_diff_right)
+
+        self.btn_diff = QtWidgets.QPushButton("对比", self)
+        self.btn_diff.setObjectName("btn_diff")
+        self.btn_diff.setToolTip("并排对比两个版本的内容")
+        version_row.addWidget(self.btn_diff)
+
         version_row.addStretch()
         root.addLayout(version_row)
 
@@ -765,8 +797,16 @@ class RightPanel(QtWidgets.QWidget):
 
         btn_row.addStretch()
 
+        self.btn_ai_clear = QtWidgets.QPushButton("清空上下文", self)
+        self.btn_ai_clear.setObjectName("btn_ai_clear")
+        self.btn_ai_clear.setToolTip("清空当前问AI 会话的对话历史，之后提问不再带上旧上下文")
+        btn_row.addWidget(self.btn_ai_clear)
+
         self.btn_ai_ask = QtWidgets.QPushButton("问AI", self)
         self.btn_ai_ask.setObjectName("btn_ai_ask")
+        self.btn_ai_ask.setToolTip(
+            "发送输入框内容（输入框内回车即发送，Shift+回车换行）"
+        )
         btn_row.addWidget(self.btn_ai_ask)
         root.addLayout(btn_row)
 
@@ -801,8 +841,14 @@ class RightPanel(QtWidgets.QWidget):
             "btn_save": self.btn_save,
             "btn_delete": self.btn_delete,
             "btn_ai_ask": self.btn_ai_ask,
+            "btn_ai_clear": self.btn_ai_clear,
             "label_version": self.label_version,
             "combo_version": self.combo_version,
+            "label_diff": self.label_diff,
+            "combo_diff_left": self.combo_diff_left,
+            "label_diff_arrow": self.label_diff_arrow,
+            "combo_diff_right": self.combo_diff_right,
+            "btn_diff": self.btn_diff,
         }
         for key, widget in mapping.items():
             setattr(mw, key, widget)
@@ -876,6 +922,11 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self._ai_request_seq = 0
         self._active_ai_request_id: int | None = None
         self._in_selection_changed = False
+        # 右键弹菜单期间：Qt 会把当前项挪到右键那一项并触发选中变化，
+        # 用它挡住「右键即打开文件」，菜单收起后还原原选中项
+        self._right_click_guard = False
+        self._right_click_view = None
+        self._right_click_selection: list = []
         self._initializing = True
         # 笔记列表后台加载（QThread）：进行中的加载器 + 待重载标记
         self._notes_loader: _NotesLoaderThread | None = None
@@ -1212,6 +1263,12 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             ".txt": "text",
         }
         return ext_mode_map.get(ext, "text")
+
+    def _diff_mode_from_filename(self, filename: str) -> str:
+        """对比窗口用的编辑模式：必须源码态，行号才能与源码 1:1 对齐。"""
+        mode = self._mode_from_filename(filename)
+        # markdown_preview 会把多行渲染成块（表格/图片），行号无法与源码对应
+        return "markdown" if mode == "markdown_preview" else mode
 
     def _note_file_path(self, title: str) -> Path:
         return self._notepad_list_dir() / title
@@ -1865,6 +1922,13 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         return ""
 
     def _on_notes_tree_context_menu(self, pos: QtCore.QPoint) -> None:
+        """notes_tree 右键菜单（弹菜单期间不因选中变化而加载文件）。"""
+        try:
+            self._on_notes_tree_context_menu_impl(pos)
+        finally:
+            self._end_right_click_guard()
+
+    def _on_notes_tree_context_menu_impl(self, pos: QtCore.QPoint) -> None:
         """notes_tree 右键菜单"""
         tree = self.notes_tree
         if tree is None:
@@ -1910,6 +1974,13 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             menu.exec(tree.viewport().mapToGlobal(pos))
 
     def _on_notes_list_context_menu(self, pos: QtCore.QPoint) -> None:
+        """notes_list 右键菜单（弹菜单期间不因选中变化而加载文件）。"""
+        try:
+            self._on_notes_list_context_menu_impl(pos)
+        finally:
+            self._end_right_click_guard()
+
+    def _on_notes_list_context_menu_impl(self, pos: QtCore.QPoint) -> None:
         """notes_list 右键菜单"""
         lst = self.notes_list
         if lst is None:
@@ -2294,7 +2365,52 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
     def _find_tree_item_by_note_id(self, note_id: int) -> QtWidgets.QTreeWidgetItem | None:
         return self._find_tree_item_by_user_role(note_id)
 
+    def _notes_view(self):
+        """当前生效的笔记视图控件（树或列表）。"""
+        for name in ("notes_tree", "notes_list"):
+            view = getattr(self, name, None)
+            if view is not None and self._qt_is_valid(view):
+                return view
+        return None
+
+    def _begin_right_click_guard(self, view) -> None:
+        """右键按下：记下当前选中项，菜单期间不因选中变化切换编辑器内容。"""
+        self._right_click_guard = True
+        self._right_click_view = view
+        try:
+            self._right_click_selection = list(view.selectedItems())
+        except Exception:
+            self._right_click_selection = []
+
+    def _end_right_click_guard(self) -> None:
+        """菜单收起：还原原选中项。
+
+        不还原的话，被右键的那项会一直处于「已选中」状态，用户随后左键点它
+        不会产生选中变化，文件就再也打不开了。
+        """
+        view = self._right_click_view
+        selection = self._right_click_selection
+        self._right_click_guard = False
+        self._right_click_view = None
+        self._right_click_selection = []
+        if view is None or not self._qt_is_valid(view):
+            return
+        was_blocked = view.blockSignals(True)
+        try:
+            view.clearSelection()
+            for item in selection:
+                if item is not None:
+                    item.setSelected(True)
+        except Exception:
+            pass
+        finally:
+            view.blockSignals(was_blocked)
+
     def _on_selection_changed(self) -> None:
+        if self._right_click_guard:
+            # 右键只是要弹菜单，不改动正在编辑的内容
+            lprint("右键弹菜单：忽略本次选中变化")
+            return
         if self._in_selection_changed:
             return
         self._in_selection_changed = True
@@ -2592,7 +2708,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         except Exception as exc:
             lprint(f"[l_notepad] WARN: 记录版本历史失败: {exc}")
 
-    def _populate_version_combo(self) -> None:
+    def _populate_version_combo(self, *, reset_diff: bool = False) -> None:
         """展开版本下拉框前，重新拉取当前内容的历史版本列表。"""
         combo = getattr(self, "combo_version", None)
         if not self._qt_is_valid(combo):
@@ -2604,6 +2720,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             combo.addItem("当前内容不支持版本历史", None)
             combo.setCurrentIndex(0)
             combo.blockSignals(False)
+            self._populate_diff_combos(None, reset=reset_diff)
             return
         # 切换到不同内容时，清除上次选中的版本记录
         ref_key = f"{kind}:{ref}"
@@ -2616,11 +2733,13 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             combo.addItem(f"读取版本历史失败：{exc}", None)
             combo.setCurrentIndex(0)
             combo.blockSignals(False)
+            self._populate_diff_combos(None, reset=reset_diff)
             return
         if not versions:
             combo.addItem("暂无历史版本", None)
             combo.setCurrentIndex(0)
             combo.blockSignals(False)
+            self._populate_diff_combos(None, reset=reset_diff)
             return
         total = len(versions)
         for i, v in enumerate(versions):
@@ -2642,6 +2761,67 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
                     break
         combo.setCurrentIndex(target_index)
         combo.blockSignals(False)
+        self._populate_diff_combos(versions, reset=reset_diff)
+
+    def _populate_diff_combos(
+        self, versions: list[dict] | None, *, reset: bool = False
+    ) -> None:
+        """填充「对比」两个下拉框。
+
+        默认 = 最新 vs 上一版；切换内容（reset=True）时强制回到默认，否则尽量保留
+        用户当前选择（版本被修剪后自动回落默认）。不足两版时禁用对比按钮。
+        """
+        left = getattr(self, "combo_diff_left", None)
+        right = getattr(self, "combo_diff_right", None)
+        button = getattr(self, "btn_diff", None)
+        if not (self._qt_is_valid(left) and self._qt_is_valid(right)):
+            return
+        prev_left = left.currentData() if left.count() else None
+        prev_right = right.currentData() if right.count() else None
+        self._set_diff_enabled(False)
+        for combo in (left, right):
+            combo.blockSignals(True)
+            combo.clear()
+        items = list(reversed(versions or []))  # 旧 → 新
+        if len(items) < 2:
+            left.addItem("（无上一版）", None)
+            right.addItem("（无历史版本）", None)
+            for combo in (left, right):
+                combo.setCurrentIndex(0)
+                combo.blockSignals(False)
+            return
+        ids: list[int] = []
+        for i, v in enumerate(items):
+            label = f"v{i + 1} · {v['saved_at']} · {v['length']}字"
+            ids.append(v["id"])
+            for combo in (left, right):
+                combo.addItem(label, v["id"])
+                combo.setItemData(
+                    combo.count() - 1, label, QtCore.Qt.ItemDataRole.ToolTipRole
+                )
+        if not reset and prev_left in ids and prev_right in ids:
+            left.setCurrentIndex(ids.index(prev_left))
+            right.setCurrentIndex(ids.index(prev_right))
+        else:
+            left.setCurrentIndex(len(items) - 2)  # 上一版
+            right.setCurrentIndex(len(items) - 1)  # 最新
+        for combo in (left, right):
+            combo.blockSignals(False)
+        self._set_diff_enabled(True)
+        if self._qt_is_valid(button):
+            button.setToolTip("并排对比两个版本的内容")
+
+    def _set_diff_enabled(self, enabled: bool) -> None:
+        """对比下拉框/按钮的可用性（无版本、只有一版、问AI 面板时禁用）。"""
+        for name in ("combo_diff_left", "combo_diff_right"):
+            widget = getattr(self, name, None)
+            if self._qt_is_valid(widget):
+                widget.setEnabled(enabled)
+        button = getattr(self, "btn_diff", None)
+        if self._qt_is_valid(button):
+            button.setEnabled(enabled)
+            if not enabled:
+                button.setToolTip("至少需要两个版本才能对比")
 
     def _on_version_combo_activated(self, index: int) -> None:
         """选中某个历史版本后载入其内容。"""
@@ -2672,7 +2852,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
                     self._current_version_id = versions[0]["id"]
             except Exception:
                 pass
-        self._populate_version_combo()
+        self._populate_version_combo(reset_diff=True)
 
     def _apply_version(self, version_id: int) -> None:
         """把指定版本的内容载入编辑器（标记为已修改，需手动保存以生效）。"""
@@ -2686,6 +2866,51 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self.status.showMessage(
             f"已载入版本 {version['saved_at']}，保存后生效", 3000
         )
+
+    def _on_diff_clicked(self) -> None:
+        """并排对比两个选中的历史版本（默认最新 vs 上一版）。"""
+        left_combo = getattr(self, "combo_diff_left", None)
+        right_combo = getattr(self, "combo_diff_right", None)
+        if not (self._qt_is_valid(left_combo) and self._qt_is_valid(right_combo)):
+            return
+        left_id = left_combo.itemData(left_combo.currentIndex())
+        right_id = right_combo.itemData(right_combo.currentIndex())
+        if not left_id or not right_id or left_id == right_id:
+            self.status.showMessage("请选择两个不同的版本再对比", 3000)
+            return
+        left_ver = history_store.get_version(int(left_id))
+        right_ver = history_store.get_version(int(right_id))
+        if left_ver is None or right_ver is None:
+            self.status.showMessage("所选版本已不存在，已刷新版本列表", 4000)
+            self._populate_version_combo(reset_diff=True)
+            return
+        name = left_ver["title"] or right_ver["title"] or "当前内容"
+        # 版本列表传给对话框：窗口内可直接切换两侧版本重新对比
+        versions = [
+            (left_combo.itemData(i), left_combo.itemText(i))
+            for i in range(left_combo.count())
+            if left_combo.itemData(i) is not None
+        ]
+
+        def _load_version(version_id):
+            ver = history_store.get_version(int(version_id))
+            return None if ver is None else ver["content"]
+
+        dlg = VersionDiffDialog(
+            name=name,
+            left_label=left_combo.currentText(),
+            right_label=right_combo.currentText(),
+            left_text=left_ver["content"],
+            right_text=right_ver["content"],
+            mode=self._diff_mode_from_filename(name),
+            dirty_hint=bool(getattr(self.state, "dirty", False)),
+            versions=versions,
+            version_loader=_load_version,
+            left_version_id=int(left_id),
+            right_version_id=int(right_id),
+            parent=self,
+        )
+        dlg.exec()
 
     @staticmethod
     def _format_file_size(num_bytes: int) -> str:
@@ -2710,6 +2935,36 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         if self._qt_is_valid(status_bar):
             status_bar.setText(text)
             status_bar.setToolTip(display)
+
+    def _on_preview_load_progress(self, stage: str, done: int, total: int) -> None:
+        """Markdown 预览后台加载进度 → 底部状态栏。"""
+        phase = "渲染" if stage == "render" else "插入"
+        if total > 0:
+            percent = int(done * 100 / total)
+            text = f"预览加载中（{phase} {done}/{total} · {percent}%）"
+        else:
+            text = f"预览加载中（{phase}…）"
+        status_bar = self._right_widget_refs.get("CodeEditorStatusBar")
+        if self._qt_is_valid(status_bar):
+            status_bar.setText(text)
+
+    def _on_preview_load_finished(self) -> None:
+        """后台加载结束：底部状态栏恢复成文件信息。"""
+        path = getattr(self.content_edit, "_current_file_path", None)
+        if path:
+            try:
+                file_path = Path(str(path))
+                if file_path.is_file():
+                    self._set_code_editor_status_text(
+                        str(file_path), file_path.stat().st_size
+                    )
+                    return
+            except OSError:
+                pass
+        self._set_code_editor_status_text("未加载文件")
+
+    def _on_preview_load_failed(self, message: str) -> None:
+        self.status.showMessage(f"预览加载失败：{message}", 5000)
 
     def _set_ai_status_bar(self, session: AiSession | None) -> None:
         if session is None:
@@ -3093,8 +3348,16 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self.btn_refresh.clicked.connect(self._on_refresh_button_clicked)
         self.btn_favorite.clicked.connect(self._toggle_favorite_current)
         self.btn_ai_ask.clicked.connect(self._ask_ai)
+        if self._qt_is_valid(getattr(self, "btn_ai_clear", None)):
+            self.btn_ai_clear.clicked.connect(self._clear_ai_context)
+
+        # Markdown 预览后台加载：底部状态栏显示进度，结束/失败后恢复
+        self.content_edit.preview_load_progress().connect(self._on_preview_load_progress)
+        self.content_edit.preview_load_finished().connect(self._on_preview_load_finished)
+        self.content_edit.preview_load_failed().connect(self._on_preview_load_failed)
         self.combo_version.aboutToShowPopup.connect(self._populate_version_combo)
         self.combo_version.activated.connect(self._on_version_combo_activated)
+        self.btn_diff.clicked.connect(self._on_diff_clicked)
 
         # 编辑器事件过滤
         for editor_widget in (self.content_edit, self.ai_answer_edit):
@@ -3223,10 +3486,18 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             changed += 1
         # 切换版本按钮：仅非问AI面板显示
         # 版本下拉框与标签：仅非问AI面板显示
-        if self._qt_is_valid(getattr(self, "combo_version", None)):
-            self.combo_version.setVisible(not visible)
-        if self._qt_is_valid(getattr(self, "label_version", None)):
-            self.label_version.setVisible(not visible)
+        for name in (
+            "combo_version",
+            "label_version",
+            "label_diff",
+            "combo_diff_left",
+            "label_diff_arrow",
+            "combo_diff_right",
+            "btn_diff",
+        ):
+            widget = getattr(self, name, None)
+            if self._qt_is_valid(widget):
+                widget.setVisible(not visible)
         if skipped:
             lprint(f"AI 控件可见性跳过已失效控件: {', '.join(skipped)}")
         lprint(f"AI 控件可见性: {visible}, changed={changed}")
@@ -4088,11 +4359,40 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             _set_code_editor_document(answer_edit, self._render_ai_session_text(session))
             answer_edit.blockSignals(False)
 
+    def _clear_ai_context(self) -> None:
+        """清空当前问AI 会话的上下文（对话历史 + 回答区显示），保留输入框草稿。
+
+        之后提问不再携带旧消息（`_ask_ai` 只把 session.messages 作为历史发出）。
+        """
+        if not self._ask_ai_mode or not self._current_ai_session_id:
+            self.status.showMessage("当前不在问AI 会话中", 2500)
+            return
+        session = self._ai_sessions.get(self._current_ai_session_id)
+        if session is None:
+            self.status.showMessage("当前会话不存在", 2500)
+            return
+        if session.in_flight:
+            self.status.showMessage("正在请求中，请等本轮结束后再清空上下文", 3000)
+            return
+        removed = len(session.messages)
+        session.messages.clear()
+        session.streaming_text = ""
+        session.reasoning_text = ""
+        self._update_ai_tab_content(session)
+        self._update_token_labels()
+        self._save_settings()
+        self.status.showMessage(f"已清空对话上下文（{removed} 条消息）", 3000)
+        lprint(f"清空问AI上下文：会话={session.title}，清除消息 {removed} 条")
+
     def _ask_ai(self) -> None:
         if not self._ask_ai_mode or not self._current_ai_session_id:
             return
         session = self._ai_sessions.get(self._current_ai_session_id)
         if session is None:
+            return
+        if session.in_flight:
+            # 回车连按 / 重复点击：本轮未结束就不再发
+            self.status.showMessage("正在请求中，请稍候", 2000)
             return
         # 使用当前标签页的内容编辑器
         content_edit = self._get_ai_tab_content_edit(self._current_ai_session_id)
@@ -5049,6 +5349,12 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             size_bytes = None
         self._set_code_editor_status_text(str(path), size_bytes)
         self._update_title()
+        # 重载后的磁盘内容进版本历史（内容未变时 add_version 自动去重）：
+        # 用局部 text（刚从磁盘读出的全文）而非 _get_content_text()，
+        # markdown 预览态下编辑区正文不是权威来源。
+        kind, ref, title = self._current_version_context()
+        if kind and ref:
+            self._record_version(kind, ref, title, text)
         self._sync_version_combo_on_open()
         self._restore_editor_scroll_ratio(editor, scroll_ratio)
         self.status.showMessage(f"已重载本地文件：{path.name}", 2500)
@@ -5102,6 +5408,26 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         ):
             if self._handle_external_file_drop(event):
                 return True
+        # 问AI 输入框：回车发送，Shift+回车换行（只对 AI 标签页的输入框生效，
+        # 笔记编辑器与预览层不受影响）
+        if (
+            event.type() == QtCore.QEvent.Type.KeyPress
+            and event.key()
+            in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter)
+            and not (event.modifiers() & QtCore.Qt.KeyboardModifier.ShiftModifier)
+            and self._is_ai_tab_input(watched)
+        ):
+            self._ask_ai()
+            return True
+        # 笔记列表/树：右键按下先记下原选中项（Qt 会把当前项挪到右键那一项）
+        notes_view = self._notes_view()
+        if (
+            notes_view is not None
+            and watched is notes_view.viewport()
+            and event.type() == QtCore.QEvent.Type.MouseButtonPress
+            and event.button() == QtCore.Qt.MouseButton.RightButton
+        ):
+            self._begin_right_click_guard(notes_view)
         # 中键拖拽调序（拖影 + 落点线）：仅在 notes_tree 的 viewport 上生效
         tree = getattr(self, "notes_tree", None)
         if tree is not None and watched is tree.viewport():
@@ -6487,6 +6813,10 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         content_edit.editor().textChanged.connect(
             lambda: self._on_ai_tab_text_changed(session.session_id)
         )
+        # 回车发送：输入框按键走 eventFilter（Shift+回车仍换行）
+        content_edit.setToolTip("回车发送，Shift+回车换行")
+        for target in (content_edit.editor(), content_edit.editor().viewport()):
+            target.installEventFilter(self)
 
         # 添加到标签页
         index = self.ai_tabs.addTab(tab_widget, session.title)
@@ -6532,6 +6862,19 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         if self.ai_tabs.count() == 0:
             return None
         return self.ai_tabs.currentWidget()
+
+    def _is_ai_tab_input(self, watched) -> bool:
+        """watched 是否是当前 AI 标签页的输入框（或其 viewport）。"""
+        if not self._ask_ai_mode:
+            return False
+        content_edit = self._get_ai_tab_content_edit()
+        if content_edit is None or not self._qt_is_valid(content_edit):
+            return False
+        try:
+            inner = content_edit.editor()
+        except Exception:
+            return False
+        return watched is inner or watched is inner.viewport()
 
     def _get_ai_tab_content_edit(self, session_id: str | None = None) -> CodeEditorWidget | None:
         """获取指定会话的内容编辑器，如果不指定则获取当前标签页的"""

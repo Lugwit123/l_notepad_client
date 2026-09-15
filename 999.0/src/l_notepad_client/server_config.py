@@ -35,7 +35,8 @@ def _is_prod() -> bool:
 
 
 # 生产入口：统一走 443 + 正式证书（域名）；不再使用明文 8080（该端口只监听回环、仅供本机调试）
-_PROD_PREFIX = "https://lugwit.duckdns.org"
+# 域名来自 wuwo/config/config.yaml 的 domain（wuwo 注入 LUGWIT_DOMAIN_URL），换域名不用改代码
+_PROD_PREFIX = os.environ.get("LUGWIT_DOMAIN_URL") or "https://lugwit.duckdns.org"
 _DEV_PREFIX = "http://127.0.0.1:8080"
 
 

@@ -16,6 +16,21 @@ app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
 
 from l_notepad_client import ui as ui_mod
 
+# QMenu.exec 是阻塞的模态调用：直接改类属性（QtWidgets.QMenu.exec = stub）在
+# PySide6 上不生效，菜单照弹 → 测试会永久挂住（终端里表现为"跑了 20 分钟"）。
+# 必须用子类覆盖 exec；全局替换后，下面各处原有的 exec 补丁/还原都落在子类上，
+# 仍然是非阻塞的。
+_menu_actions: list[str] = []
+
+
+class _StubMenu(QtWidgets.QMenu):
+    def exec(self, *a, **k):
+        _menu_actions.extend(act.text() for act in self.actions())
+        return None
+
+
+ui_mod.QtWidgets.QMenu = _StubMenu
+
 FAILS: list[str] = []
 
 
@@ -78,6 +93,12 @@ def make_window(tmp_root: Path, note_title: str):
     win.notes_list = QtWidgets.QListWidget()
     win._notepad_list_dir = lambda: tmp_root
     win._notes_tree_mode = False
+    # 与真实 __init__ 一致：右键守卫 选中变化重入标记
+    # （少了它们 _on_selection_changed / _end_right_click_guard 会读到未定义属性）
+    win._in_selection_changed = False
+    win._right_click_guard = False
+    win._right_click_view = None
+    win._right_click_selection = []
     win._update_title = lambda: None
     win._sync_version_combo_on_open = lambda: None
     win._invalidate_log_content_cache = lambda *a, **k: None
@@ -376,6 +397,10 @@ big = tmp / "长预览.md"
 big_lines = [f"第 {i} 行内容" for i in range(1, 201)]
 big.write_text("\n".join(big_lines) + "\n", encoding="utf-8")
 win7 = make_window(tmp, "长预览.md")
+# 离屏下隐藏窗口不做文档布局（实测 doc height=0 → 滚动条 max=0），必须先显示，
+# 否则「前置：长文件已可滚动」是个假失败
+win7.resize(800, 600)
+win7.show()
 editor7 = CodeEditorWidget(win7)
 editor7.resize(600, 400)
 editor7.show()
@@ -460,6 +485,53 @@ check("状态栏给出反馈", any("已复制文件路径" in m for m in win_men
 app.clipboard().setText("")
 win_menu._copy_text_to_clipboard("")
 check("空文本不覆盖剪贴板", app.clipboard().text() == "", repr(app.clipboard().text()))
+
+print("右键弹菜单：不加载被右键的文件")
+win_rc = make_window(tmp, "笔记A.md")
+win_rc.notes_tree = None
+win_rc.notes_list = QtWidgets.QListWidget()
+lst_rc = win_rc.notes_list
+item_a = QtWidgets.QListWidgetItem("A.md")
+item_a.setData(QtCore.Qt.ItemDataRole.UserRole, 7)
+item_a.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "A.md")
+lst_rc.addItem(item_a)
+item_b = QtWidgets.QListWidgetItem("B.md")
+item_b.setData(QtCore.Qt.ItemDataRole.UserRole, 8)
+item_b.setData(QtCore.Qt.ItemDataRole.UserRole + 1, "B.md")
+lst_rc.addItem(item_b)
+lst_rc.setCurrentItem(item_a)
+item_a.setSelected(True)
+loads: list[int] = []
+win_rc._on_selection_changed_inner = lambda: loads.append(1)
+lst_rc.itemSelectionChanged.connect(win_rc._on_selection_changed)
+
+# eventFilter 在右键按下时调用它（这里直接调，最小桩窗口走不完 eventFilter 的其余分支）
+win_rc._begin_right_click_guard(lst_rc)
+check("右键开启守卫", win_rc._right_click_guard is True)
+check("守卫记下了原选中项", win_rc._right_click_selection == [item_a],
+      str(win_rc._right_click_selection))
+# 模拟 Qt 右键时把选中挪到被右键的那一项
+lst_rc.clearSelection()
+item_b.setSelected(True)
+check("右键期间不加载文件", loads == [], str(loads))
+
+_orig_exec_rc = ui_mod.QtWidgets.QMenu.exec
+ui_mod.QtWidgets.QMenu.exec = _fake_exec
+try:
+    win_rc._on_notes_list_context_menu(lst_rc.visualItemRect(item_b).center())
+finally:
+    ui_mod.QtWidgets.QMenu.exec = _orig_exec_rc
+check("菜单收起后守卫关闭", win_rc._right_click_guard is False)
+check(
+    "选中项已还原（右键不再改选中）",
+    item_a.isSelected() and not item_b.isSelected(),
+    f"a={item_a.isSelected()} b={item_b.isSelected()}",
+)
+check("守卫状态已清空", win_rc._right_click_view is None and not win_rc._right_click_selection)
+
+# 还原后，用户左键点刚才那一项仍然会加载（不会因为"已选中"而卡住）
+item_b.setSelected(True)
+check("随后左键点它仍会加载", loads == [1], str(loads))
 
 print()
 if FAILS:
