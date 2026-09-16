@@ -193,8 +193,8 @@ def diff_stats(rows: list[DiffLine]) -> tuple[int, int, int]:
 
 - 两栏均为 `CodeEditorWidget`（`l_qt_wgt_lib.smart_widget`，`ui.py:40-44` 已导入）：
   `setReadOnly(True)` + `set_mode(...)`，与主编辑器同一套高亮。
-- **必须是「源码态」模式，不能用 `markdown_preview`**：预览态会把多个源码行渲染成富文本块
-  （图片/表格），行数与源码不再 1:1，行号与逐行背景会错位。因此新增小映射
+- **默认必须是「源码态」模式，不能用 `markdown_preview` 作默认**：预览态会把多个源码行渲染成
+  富文本块（图片/表格），行数与源码不再 1:1，行号与逐行背景会错位。因此新增小映射
   `_diff_mode_from_filename(name)`（`ui.py:1204 _mode_from_filename` 的变体）：
 
   | 扩展名 | 编辑器模式 | 说明 |
@@ -203,6 +203,11 @@ def diff_stats(rows: list[DiffLine]) -> tuple[int, int, int]:
   | `.log` | `log` | 日志高亮 |
   | `.py` | `python` | Python 高亮 |
   | 其它 | `text` | 纯文本 |
+
+  > 后续演进（见 `openspec/changes/add-version-diff-preview-mode/`）：预览态与源码态**并列存在**。
+  > 默认仍是源码态（本节契约不变），工具条可切到「预览」——预览态改为按 **Markdown 块**对齐，
+  > 逐块着色、按比例同步滚动、隐藏行号；源码态的补位对齐/行号/行内字符级高亮/值镜像滚动全部保留。
+  > 两种模式的取舍不同：源码态给精确核对，预览态给可读性。改动细节与决策见该 change 的 `design.md`。
 
 - 副作用：Markdown 源码模式下超长图片 URL 会被折叠隐藏（`code_editor.py` 的
   `MarkdownCodeHighlighter`），差异里这类行只显示 URL 前 100 字符，属可接受行为。

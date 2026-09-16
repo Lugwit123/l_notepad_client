@@ -34,9 +34,11 @@ def _is_prod() -> bool:
     return os.environ.get("Lugwit_deploy", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
-# 生产入口：统一走 443 + 正式证书（域名）；不再使用明文 8080（该端口只监听回环、仅供本机调试）
-# 域名来自 wuwo/config/config.yaml 的 domain（wuwo 注入 LUGWIT_DOMAIN_URL），换域名不用改代码
-_PROD_PREFIX = os.environ.get("LUGWIT_DOMAIN_URL") or "https://lugwit.duckdns.org"
+# 生产入口：统一走 443（IP + 证书）；不再使用明文 8080（该端口只监听回环、仅供本机调试）
+# 域名来自 wuwo/config/config.yaml 的 domain（wuwo 注入 LUGWIT_DOMAIN_URL）。
+# 2026-09-16：不再使用域名（duckdns 在国内解析/TLS 常被拦），config.yaml 的 domain 留空，
+# 这里兜底改为服务器 IP 直连。
+_PROD_PREFIX = os.environ.get("LUGWIT_DOMAIN_URL") or "https://121.196.144.88"
 _DEV_PREFIX = "http://127.0.0.1:8080"
 
 

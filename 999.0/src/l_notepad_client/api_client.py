@@ -60,6 +60,20 @@ class NotepadApi:
         data = self._get(f"/api/notes/{note_id}")
         return NoteDto(**data)
 
+    def search(self, query: str, limit: int = 100, offset: int = 0,
+               sources: str = "") -> dict[str, Any]:
+        """后端全文检索（模糊 + 倒排索引）。
+
+        GET /api/search?q=<query>&limit=<n>&offset=<n>&sources=<sources>
+        返回 {"query", "total", "took_ms", "fallback", "hits": [...]}；
+        hits[].path 为笔记相对路径（= NoteDto.title）或知识库文件相对路径。
+        """
+        params: dict[str, Any] = {"q": query, "limit": int(limit), "offset": int(offset)}
+        if sources:
+            params["sources"] = sources
+        data = self._get("/api/search?" + urllib.parse.urlencode(params))
+        return data or {}
+
     def create_note(self, title: str, content: str) -> NoteDto:
         data = self._post("/api/notes", {"title": title, "content": content})
         return NoteDto(**data)

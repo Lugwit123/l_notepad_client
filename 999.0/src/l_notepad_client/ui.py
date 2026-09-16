@@ -30,6 +30,7 @@ except Exception:  # pragma: no cover - shiboken6 随 PySide6 提供，兜底避
 from .api_client import ApiError, LogDto, NotepadApi, NoteDto
 from . import history_store
 from . import paths
+from . import server_config
 from .folder_favorites_widget import FolderFavoritesWidget as FolderFavoritesPanel
 from .account_favorites_widget import AccountFavoritesWidget as AccountFavoritesPanel
 from .settings_widget import SettingsWidget
@@ -92,6 +93,11 @@ IPC_FILE_FOLDER_ID = "__ipc_file_folder__"
 SERVER_LOG_PREFIX = "__server_log__:"
 SERVER_LOG_FOLDER_ID = "__server_log_folder__"
 SERVER_LOG_SUB_PREFIX = "__server_log_sub__:"
+# 全文检索命中的「知识库/未映射笔记」行：UserRole 用字符串前缀 + hits 下标，
+# 绝不能是 int（否则会被当成笔记 id 打开/重命名，见 _on_selection_changed_inner）
+SEARCH_HIT_PREFIX = "__searchhit__:"
+# 搜索框去抖时长（毫秒）
+_SEARCH_DEBOUNCE_MS = 350
 EXTERNAL_FILES_STATE_NAME = "external_files.json"
 # 本地文件外部修改轮询间隔（毫秒）：QFileSystemWatcher 丢目标时的兜底
 _LOCAL_FILE_POLL_MS = 1500
@@ -318,6 +324,30 @@ class _NotesLoaderThread(QtCore.QThread):
             self.loaded.emit(None, exc)
         else:
             self.loaded.emit(notes, None)
+
+
+class _SearchThread(QtCore.QThread):
+    """后台调用后端全文检索接口（模糊 + 倒排索引）。
+
+    与 _NotesLoaderThread 同构：在 QThread 中执行 api.search()，完成后经 loaded
+    信号回到主线程刷新 UI，避免搜索时阻塞界面。
+    """
+
+    loaded = QtCore.Signal(object, object)  # (result, error)
+
+    def __init__(self, api, query: str, *, limit: int = 200, parent=None) -> None:
+        super().__init__(parent)
+        self._api = api
+        self._query = query
+        self._limit = limit
+
+    def run(self) -> None:
+        try:
+            result = self._api.search(self._query, limit=self._limit)
+        except Exception as exc:  # noqa: BLE001
+            self.loaded.emit(None, exc)
+        else:
+            self.loaded.emit(result, None)
 
 
 # ---- 左侧文件树 delegate：将 "文件名\n日期" 分别绘制成两行不同颜色 ----
@@ -931,6 +961,16 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         # 笔记列表后台加载（QThread）：进行中的加载器 + 待重载标记
         self._notes_loader: _NotesLoaderThread | None = None
         self._notes_reload_pending = False
+        # 全文检索：去抖定时器 + 后台检索线程 + 命中结果
+        # _search_hits=None 表示不在搜索模式（走原来的本地标题过滤）
+        self._search_hits: list[dict] | None = None
+        self._search_extra_hits: list[tuple[int, dict]] = []
+        self._search_pending_text = ""
+        self._search_reload_pending = False
+        self._search_thread: _SearchThread | None = None
+        self._search_timer = QtCore.QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.timeout.connect(self._on_search_timeout)
         # 右侧区域控件引用统一收口，避免只依赖局部属性导致引用丢失
         self._right_widget_refs: dict[str, QtWidgets.QWidget] = {}
         self._tray_icon: QtWidgets.QSystemTrayIcon | None = None
@@ -1503,11 +1543,30 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             current_id = self._last_open_note_id
         query = self.search_edit.text().strip()
         notes_sorted = self._sort_notes(notes)
-        grouped_notes = self._group_notes_by_folder(notes_sorted, query=query)
-        if self._notes_tree_mode:
-            self._refresh_notes_tree(grouped_notes, query=query)
+        if self._search_hits is not None:
+            # 搜索模式：后端已给出命中（模糊 + 倒排），本地标题过滤不再生效。
+            # 按命中顺序把 hits[].path 映射到 NoteDto，只渲染命中的笔记；
+            # 映射不到的 note 命中 / kb 命中作为额外行（浏览器打开）。
+            by_title = {n.title: n for n in notes}
+            matched: list[NoteDto] = []
+            extra: list[tuple[int, dict]] = []
+            for idx, hit in enumerate(self._search_hits):
+                note = by_title.get(hit.get("path")) if hit.get("source") == "note" else None
+                if note is not None and not note.title.startswith("问AI"):
+                    matched.append(note)
+                else:
+                    extra.append((idx, hit))
+            self._search_extra_hits = extra
+            grouped_notes = self._group_notes_by_folder(matched, query="")
+            render_query = ""
         else:
-            self._refresh_notes_list(grouped_notes, query=query)
+            self._search_extra_hits = []
+            grouped_notes = self._group_notes_by_folder(notes_sorted, query=query)
+            render_query = query
+        if self._notes_tree_mode:
+            self._refresh_notes_tree(grouped_notes, query=render_query)
+        else:
+            self._refresh_notes_list(grouped_notes, query=render_query)
 
         if self._ask_ai_mode:
             self._set_ai_editor(self._current_ai_session_id)
@@ -1570,8 +1629,124 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         return removed
 
     def _apply_filter(self) -> None:
-        # lightweight local filter; refresh keeps the list consistent
+        # 搜索框：去抖 350ms 后异步调用后端全文检索（模糊 + 倒排索引）；
+        # 空串回到原行为（清空搜索态 + 重新加载笔记列表）。
+        text = self.search_edit.text().strip()
+        if not text:
+            self._search_timer.stop()
+            self._search_pending_text = ""
+            self._search_hits = None
+            self._search_extra_hits = []
+            self.refresh_notes()
+            return
+        self._search_pending_text = text
+        self._search_timer.start(_SEARCH_DEBOUNCE_MS)
+
+    def _search_thread_running(self) -> bool:
+        """后台检索线程是否仍在运行（C++ 对象可能已被 deleteLater 销毁）。"""
+        thread = getattr(self, "_search_thread", None)
+        if thread is None:
+            return False
+        try:
+            return thread.isRunning()
+        except RuntimeError:
+            self._search_thread = None
+            return False
+
+    def _on_search_timeout(self) -> None:
+        """去抖到期：启动后台检索线程。"""
+        query = (self._search_pending_text or "").strip()
+        if not query:
+            return
+        if self._search_thread_running():
+            self._search_reload_pending = True
+            return
+        thread = _SearchThread(self.api, query, limit=200)
+        thread.loaded.connect(self._on_search_loaded)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_search_thread_finished)
+        self._search_thread = thread
+        thread.start()
+
+    def _on_search_loaded(self, result, error) -> None:
+        if error is not None:
+            # 检索失败：回退到原来的本地标题过滤（保持 _search_hits 为 None）
+            self._search_hits = None
+            self._search_extra_hits = []
+            self._show_error(str(error))
+        else:
+            data = result or {}
+            self._search_hits = list(data.get("hits") or [])
+            total = data.get("total", len(self._search_hits))
+            msg = f"搜索命中 {total} 条"
+            if data.get("fallback"):
+                msg += "（未找到精确短语，已显示模糊结果）"
+            self.status.showMessage(msg, 3000)
         self.refresh_notes()
+
+    def _on_search_thread_finished(self) -> None:
+        # 线程结束后再冲刷待重载标记（此时 isRunning() 已为 False）
+        self._search_thread = None
+        if self._search_reload_pending:
+            self._search_reload_pending = False
+            self._on_search_timeout()
+
+    def _search_hit_base_url(self) -> str:
+        """全文检索命中打开用的入口前缀：server_config 入口去掉 /note 等后缀。"""
+        try:
+            base = server_config.api_url() or ""
+        except Exception:
+            base = getattr(self.api, "base_url", "") or ""
+        for suffix in ("/note",):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+        return base.rstrip("/")
+
+    def _open_search_hit(self, item_id: str) -> None:
+        """双击检索命中行：在默认浏览器打开后端给出的网页。"""
+        try:
+            idx = int(item_id[len(SEARCH_HIT_PREFIX):])
+            hit = self._search_hits[idx]
+        except (ValueError, TypeError, IndexError):
+            return
+        open_url = (hit or {}).get("open_url") or ""
+        if not open_url:
+            return
+        base = self._search_hit_base_url()
+        url = (base + open_url) if base else open_url
+        try:
+            webbrowser.open(url)
+        except Exception as exc:  # noqa: BLE001
+            lprint(f"打开检索命中失败: {exc}")
+
+    def _search_hit_label(self, hit: dict) -> str:
+        """检索命中行显示文本：优先相对路径 rel，其次 path。"""
+        return hit.get("rel") or hit.get("path") or ""
+
+    def _append_search_hit_rows_list(self, lst) -> None:
+        """搜索模式下，把知识库命中/未映射笔记命中作为额外行追加到列表末尾。
+
+        UserRole 必须是字符串前缀（__searchhit__:<index>），否则会被当成笔记 id。
+        """
+        for idx, hit in self._search_extra_hits:
+            item = QtWidgets.QListWidgetItem(f"  🔗 {self._search_hit_label(hit)}")
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, f"{SEARCH_HIT_PREFIX}{idx}")
+            item.setToolTip(hit.get("snippet") or "")
+            item.setForeground(QtGui.QBrush(QtGui.QColor(120, 170, 220)))
+            item.setSizeHint(QtCore.QSize(0, 32))
+            lst.addItem(item)
+
+    def _append_search_hit_rows_tree(self, tree) -> None:
+        """搜索模式下，把知识库命中/未映射笔记命中作为额外行追加到树末尾。
+
+        UserRole 必须是字符串前缀（__searchhit__:<index>），否则会被当成笔记 id。
+        """
+        for idx, hit in self._search_extra_hits:
+            item = QtWidgets.QTreeWidgetItem([f"  🔗 {self._search_hit_label(hit)}"])
+            item.setData(0, QtCore.Qt.ItemDataRole.UserRole, f"{SEARCH_HIT_PREFIX}{idx}")
+            item.setToolTip(0, hit.get("snippet") or "")
+            item.setForeground(0, QtGui.QBrush(QtGui.QColor(120, 170, 220)))
+            tree.addTopLevelItem(item)
 
     def _setup_notes_tree(self) -> None:
         tree = self.notes_tree
@@ -1715,6 +1890,8 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
                 item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
                 self.notes_list.addItem(item)
         self._add_server_log_files_to_list(query=query)
+        if self._search_hits is not None:
+            self._append_search_hit_rows_list(self.notes_list)
         self.notes_list.blockSignals(False)
 
     def _refresh_notes_tree(self, grouped_notes: list[tuple[str, list[NoteDto]]], *, query: str = "") -> None:
@@ -1853,6 +2030,8 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
                     item.setForeground(0, QtGui.QBrush(self._missing_entry_color()))
                 ipc_folder.addChild(item)
         self._add_server_log_files_to_tree(tree, query=query)
+        if self._search_hits is not None:
+            self._append_search_hit_rows_tree(tree)
         # ② 按持久化的展开状态恢复（未记录的文件夹默认展开；ASK_AI 默认折叠由外部控制）
         def _restore_expand_walk(node: QtWidgets.QTreeWidgetItem) -> None:
             role = node.data(0, QtCore.Qt.ItemDataRole.UserRole) or ""
@@ -2299,6 +2478,8 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
                 continue
             if isinstance(item_id, str) and item_id.startswith(SERVER_LOG_PREFIX):
                 continue
+            if isinstance(item_id, str) and item_id.startswith(SEARCH_HIT_PREFIX):
+                continue
             if isinstance(item_id, str) and (
                 item_id.startswith("__folder__:") or item_id.startswith("__empty__")
                 or item_id == SERVER_LOG_FOLDER_ID
@@ -2557,6 +2738,9 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             or item_id.startswith(SERVER_LOG_SUB_PREFIX)
             or item_id == "__server_log_error__"
         ):
+            return
+        if isinstance(item_id, str) and item_id.startswith(SEARCH_HIT_PREFIX):
+            # 检索命中行（知识库/未映射笔记）：选中不加载笔记，双击时再浏览器打开
             return
         note_id = int(item_id)
         try:
@@ -4204,6 +4388,9 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             note_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
             if note_id is None or note_id == ASK_AI_ITEM_ID:
                 continue
+            if not isinstance(note_id, int) or isinstance(note_id, bool):
+                # 检索命中行等字符串角色不参与收藏排序
+                continue
             display_ids.append(int(note_id))
         fav_set = set(self._favorite_order)
         if not fav_set:
@@ -4215,6 +4402,10 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
 
     def _rename_note_from_item(self, item) -> None:
         item_id = item.data(0, QtCore.Qt.ItemDataRole.UserRole) if isinstance(item, QtWidgets.QTreeWidgetItem) else item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if isinstance(item_id, str) and item_id.startswith(SEARCH_HIT_PREFIX):
+            # 检索命中行（知识库/未映射笔记）：双击在默认浏览器打开对应网页
+            self._open_search_hit(item_id)
+            return
         if item_id == ASK_AI_ITEM_ID or (isinstance(item_id, str) and (
             item_id.startswith("__folder__:") or item_id.startswith("__empty__")
             or item_id.startswith(SERVER_LOG_PREFIX) or item_id == SERVER_LOG_FOLDER_ID

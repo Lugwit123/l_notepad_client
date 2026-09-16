@@ -16,18 +16,30 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
 
 from l_notepad_client import history_store, ui as ui_mod
 from l_notepad_client.version_diff_dialog import (
+    MAX_PREVIEW_BLOCKS,
+    PREVIEW_BLOCK_COLORS,
+    PREVIEW_CONTEXT_COLOR,
+    SPAN_COLORS,
     VersionDiffDialog,
+    align_markdown_blocks,
     build_padded_lines,
     build_side_by_side,
     diff_row_indices,
+    diff_slot_lines,
     diff_stats,
+    has_only_inline_tags,
     intra_line_spans,
+    markdown_block_texts,
+    peel_block_wrapper,
+    preview_block_indices,
+    render_line_kinds,
+    wrap_line_span,
 )
 
 FAILS: list[str] = []
@@ -86,6 +98,26 @@ check(
 )
 check("相同内容无差异", diff_stats(build_side_by_side("same", "same")) == (0, 0, 0))
 
+# replace 区间：不相似的 1:1 仍配成 replace（并排同行看旧/新），不硬拆成删+插
+rows_pair = build_side_by_side("aaa\nccc", "aaa\nbbb")
+check(
+    "不相似的 1:1 行仍配 replace",
+    diff_stats(rows_pair) == (0, 0, 1) and diff_row_indices(rows_pair) == [1],
+    str([(r.kind, r.left_text, r.right_text) for r in rows_pair]),
+)
+
+# replace 区间里一侧夹了行：靠相似锚点重新对齐，夹层落成纯 insert（不整片错配）
+rows_anchor = build_side_by_side(
+    "head\nalpha line\nbeta line\ntail", "head\nalpha line changed\nINSERTED\nbeta line\ntail"
+)
+check(
+    "夹行靠锚点重对齐：只 1 改 1 增，尾行仍 equal",
+    diff_stats(rows_anchor) == (1, 0, 1)
+    and rows_anchor[-1].kind == "equal"
+    and any(r.kind == "insert" and r.right_text == "INSERTED" for r in rows_anchor),
+    str([(r.kind, r.left_text, r.right_text) for r in rows_anchor]),
+)
+
 # ── 1b. 补位对齐 / 行内差异 / 差异行号（纯函数）────────────────
 pad_left, pad_right = build_padded_lines(rows)
 check("补位后左右等长", len(pad_left) == len(pad_right) == len(rows))
@@ -99,7 +131,125 @@ check(
     "超长行跳过行内 diff",
     intra_line_spans("x" * 5000, "y" * 5000) == ([], []),
 )
+# 整行重写（相似度过低）不做逐字标色，避免打成马赛克
+check("整行重写不逐字标色", intra_line_spans("ccc", "bbb") == ([], []))
+# 相邻窄差异段合并（逐字比较时易碎成一串小色块）：a1b2c → aXbYc 本是两段，合并成一段
+l_merge, r_merge = intra_line_spans("a1b2c", "aXbYc")
+check("相邻窄差异段合并成一段", l_merge == [(1, 4)] and r_merge == [(1, 4)], str((l_merge, r_merge)))
 check("差异行号=非 equal 行", diff_row_indices(rows) == [1, 3])
+
+# ── 1c. 块级对齐与差异行摊平（纯函数）──────────────────────────
+md_left = "# 标题\n\n第一段\n\n- a\n- b\n\n```py\nprint(1)\n\nprint(2)\n```\n\n尾部"
+md_right = "# 标题\n\n第一段改了\n\n- a\n- b\n\n```py\nprint(1)\n\nprint(2)\n```\n\n尾部\n\n新块"
+
+blocks_left = markdown_block_texts(md_left)
+blocks_right = markdown_block_texts(md_right)
+check(
+    "按空行切块（围栏内空行不切碎）",
+    len(blocks_left) == 5 and blocks_left[3] == "```py\nprint(1)\n\nprint(2)\n```",
+    str(blocks_left),
+)
+
+slots = align_markdown_blocks(blocks_left, blocks_right)
+check("块级对齐槽位数=两侧块数上限", len(slots) == 6, str([s.kind for s in slots]))
+check("块内改动按整块 replace", slots[1].kind == "replace" and slots[1].left_idx == 1)
+check("一侧多出的块按 insert 占位", slots[5].kind == "insert" and slots[5].left_idx is None)
+check("差异槽位下标", preview_block_indices(slots) == [1, 5])
+
+# 差异块摊平成「行」：行级类型——这是「看得出哪里不同」的关键
+check(
+    "replace 槽位左侧行类型",
+    diff_slot_lines(slots[1], "left") == [("replace", "第一段")],
+    str(diff_slot_lines(slots[1], "left")),
+)
+check(
+    "replace 槽位右侧行类型",
+    diff_slot_lines(slots[1], "right") == [("replace", "第一段改了")],
+    str(diff_slot_lines(slots[1], "right")),
+)
+check(
+    "replace 槽位两侧行数一致",
+    len(diff_slot_lines(slots[1], "left")) == len(diff_slot_lines(slots[1], "right")),
+)
+insert_slot_lines = diff_slot_lines(slots[5], "left")
+check(
+    "占位侧按对侧行数补空行（避免左右高度错位）",
+    all(kind == "blank" and not text for kind, text in insert_slot_lines)
+    and len(insert_slot_lines) == len(diff_slot_lines(slots[5], "right")),
+    str(insert_slot_lines),
+)
+check(
+    "纯新增块右侧全部为 insert 行",
+    {kind for kind, _t in diff_slot_lines(slots[5], "right")} == {"insert"},
+)
+check(
+    "纯删除块左侧全部为 delete 行",
+    {kind for kind, _t in diff_slot_lines(align_markdown_blocks(["a\nb"], [])[0], "left")}
+    == {"delete"},
+)
+
+# 渲染行与源码行的对应：平坦块一一对应；围栏代码块要去掉首尾 ```
+check(
+    "平坦块渲染行类型与源码行一致",
+    render_line_kinds("a\nb", [("equal", "a"), ("replace", "b")]) == ["equal", "replace"],
+)
+check(
+    "围栏代码块去掉首尾 ``` 后与渲染行一致",
+    render_line_kinds(
+        "```py\nx = 1\ny = 2\n```",
+        [("equal", "```py"), ("replace", "x = 1"), ("insert", "y = 2"), ("equal", "```")],
+    )
+    == ["replace", "insert"],
+)
+check(
+    "渲染行数与源码行数对不上时返回 None（退回整块标色）",
+    render_line_kinds("a\nb", [("equal", "a")]) is None,
+)
+
+# 逐行套 span 的前置条件：只有行内标签才允许出现
+check("纯文本行可逐行套底色", has_only_inline_tags("普通文本"))
+check(
+    "含行内标签的行可逐行套底色",
+    has_only_inline_tags('<span style="color:#fff">粗</span><a href="x">链</a>'),
+)
+check(
+    "含块级标签的行必须退回整块标色",
+    not has_only_inline_tags("<td>x</td>")
+    and not has_only_inline_tags("<li>x</li>")
+    and not has_only_inline_tags("<p>x</p>"),
+)
+
+# 外壳剥离：span 不能包住块级标签，否则嵌套非法
+prefix, contents, suffix = peel_block_wrapper(["<p>a", "b</p>"])
+check("剥离段落的块级外壳", (prefix, contents, suffix) == ("<p>", ["a", "b"], "</p>"))
+prefix, contents, suffix = peel_block_wrapper(["<h2>x</h2>"])
+check("单行标题也能剥离外壳", (prefix, contents, suffix) == ("<h2>", ["x"], "</h2>"))
+prefix, contents, suffix = peel_block_wrapper(
+    ['<table><tr><td bgcolor="#000">a', "b</td></tr></table>"]
+)
+check(
+    "代码块外壳（table/td）整体剥出",
+    (prefix, contents, suffix)
+    == ('<table><tr><td bgcolor="#000">', ["a", "b"], "</td></tr></table>"),
+    str((prefix, contents, suffix)),
+)
+check(
+    "空行用零宽空格占位（否则底色宽度为 0）",
+    "\u200b" in wrap_line_span("", "#123456"),
+)
+
+check("两侧全等时无差异槽位", preview_block_indices(align_markdown_blocks(["a", "b"], ["a", "b"])) == [])
+check("一侧为空时全部为 delete", [s.kind for s in align_markdown_blocks(["a"], [])] == ["delete"])
+check("两侧都为空时无槽位", align_markdown_blocks([], []) == [])
+check(
+    "首块差异（replace 后逐块配对）",
+    [s.kind for s in align_markdown_blocks(["x", "b"], ["y", "b"])] == ["replace", "equal"],
+)
+check(
+    "缺内容的一侧槽位文本为空串",
+    align_markdown_blocks(["a"], [])[0].right_text == ""
+    and align_markdown_blocks(["a"], [])[0].right_idx is None,
+)
 
 # ── 2. 双栏对话框 ─────────────────────────────────────────────
 dlg = VersionDiffDialog(
@@ -193,6 +343,252 @@ dlg2.combo_right_ver.addItem("v9 丢失", 9)
 dlg2.combo_right_ver.setCurrentIndex(dlg2.combo_right_ver.count() - 1)
 check("取不到版本时回退选择", dlg2.combo_right_ver.currentData() == 3)
 dlg2.close()
+
+# ── 2c. 双模式：源码 / Markdown 预览 ──────────────────────────
+def _line_colors(view) -> list[str]:
+    """预览层文档里每行的块底色（黑 = 无底色）。"""
+    out: list[str] = []
+    block = view.document().firstBlock()
+    while block.isValid():
+        out.append(block.blockFormat().background().color().name())
+        block = block.next()
+    return out
+
+
+def _fragment_colors(view) -> set[str]:
+    """预览层文档里出现过的字符底色集合（黑 = 无底色）。"""
+    out: set[str] = set()
+    block = view.document().firstBlock()
+    while block.isValid():
+        iterator = block.begin()
+        while not iterator.atEnd():
+            fragment = iterator.fragment()
+            if fragment.isValid():
+                out.add(fragment.charFormat().background().color().name())
+            iterator += 1
+        block = block.next()
+    return out
+
+
+dlg3 = VersionDiffDialog(
+    name="doc.md",
+    left_label="v1",
+    right_label="v2",
+    left_text=md_left,
+    right_text=md_right,
+    mode="markdown",
+)
+check(
+    "默认源码模式",
+    dlg3._display_mode == "source" and dlg3._mode_buttons["source"].isChecked(),
+)
+check("Markdown 才有模式切换控件", set(dlg3._mode_buttons) == {"source", "preview"})
+check(
+    "默认显示源码编辑器、隐藏预览层",
+    not dlg3.left_edit.isHidden() and dlg3._left_preview.isHidden(),
+)
+check("源码模式行号栏可见", not dlg3.left_edit.editor()._line_number_area.isHidden())
+source_text_snapshot = dlg3.left_edit.toPlainText()
+source_stats_snapshot = dlg3._stats_label.text()
+
+dlg3._set_display_mode("preview")
+check(
+    "切到预览：隐藏两侧编辑器、显示两侧预览层",
+    dlg3.left_edit.isHidden()
+    and dlg3.right_edit.isHidden()
+    and not dlg3._left_preview.isHidden()
+    and not dlg3._right_preview.isHidden(),
+)
+check(
+    "预览不借用编辑器（编辑器始终在源码态）",
+    dlg3.left_edit.current_mode() == "markdown",
+)
+check("预览导航改按块槽位", dlg3._diff_nav_items() == [1, 5], str(dlg3._diff_nav_items()))
+check("预览差异计数", dlg3.lbl_diff_counter.text() == "差异 0/2", dlg3.lbl_diff_counter.text())
+check("预览模式统计口径不变", dlg3._stats_label.text() == source_stats_snapshot)
+check(
+    "预览模式说明「按行标出差异」",
+    "按行标出差异" in dlg3._note_label.text(),
+    dlg3._note_label.text(),
+)
+
+left_colors = _line_colors(dlg3._left_preview)
+# 行级差异现在是「渲染结果里的行内 span 底色」，所以看字符格式而不是块格式
+left_span_colors = _fragment_colors(dlg3._left_preview)
+right_span_colors = _fragment_colors(dlg3._right_preview)
+check(
+    "预览：改动块左侧按行标出修改行",
+    PREVIEW_BLOCK_COLORS["replace"] in left_span_colors,
+    str(left_span_colors),
+)
+check(
+    "预览：改动块右侧按行标出修改行",
+    PREVIEW_BLOCK_COLORS["replace"] in right_span_colors,
+    str(right_span_colors),
+)
+check(
+    "预览：新增块右栏按行标出绿底",
+    PREVIEW_BLOCK_COLORS["insert"] in right_span_colors,
+    str(right_span_colors),
+)
+check(
+    "预览：左栏对应位置为占位空行（块级底色）",
+    PREVIEW_BLOCK_COLORS["blank"] in left_colors,
+    str(left_colors),
+)
+check("预览：未改动块不带任何差异底色", "#000000" in left_colors, str(left_colors))
+check(
+    "预览：未改动块仍渲染 Markdown（标题可见）",
+    "标题" in dlg3._left_preview.toPlainText(),
+    dlg3._left_preview.toPlainText()[:40],
+)
+check(
+    "预览：改动块的代码块也渲染（围栏语言标签可见）",
+    "py" in dlg3._left_preview.toPlainText(),
+    dlg3._left_preview.toPlainText()[:120],
+)
+
+# 多行改动块：只有真正改动的行上底色，未变行保持原底（否则整块糊成一片看不出改在哪）
+ctx_dlg = VersionDiffDialog(
+    name="ctx.md",
+    left_label="v1",
+    right_label="v2",
+    left_text="第一行\n第二行\n第三行",
+    right_text="第一行\n第二行改了\n第三行",
+    mode="markdown",
+)
+ctx_dlg._set_display_mode("preview")
+ctx_span_colors = _fragment_colors(ctx_dlg._left_preview)
+check(
+    "多行改动块：未变行不上底色",
+    PREVIEW_CONTEXT_COLOR not in ctx_span_colors,
+    str(ctx_span_colors),
+)
+check(
+    "多行改动块：改动行用修改底色",
+    PREVIEW_BLOCK_COLORS["replace"] in ctx_span_colors,
+    str(ctx_span_colors),
+)
+ctx_dlg.close()
+
+# 列表 / 表格这类会被渲染重排的结构：只给变动的那一项上色，未变项保持原底
+block_dlg = VersionDiffDialog(
+    name="tbl.md",
+    left_label="v1",
+    right_label="v2",
+    left_text="| A | B |\n|---|---|\n| 1 | 1 |\n\n- 甲\n- 乙",
+    right_text="| A | B |\n|---|---|\n| 1 | 2 |\n\n- 甲\n- 丙",
+    mode="markdown",
+)
+block_dlg._set_display_mode("preview")
+table_block_colors = _line_colors(block_dlg._left_preview)
+check(
+    "表格 / 列表：变动块标色",
+    PREVIEW_BLOCK_COLORS["replace"] in table_block_colors,
+    str(table_block_colors),
+)
+check(
+    "表格 / 列表：未变项保持原底（不是整块一片）",
+    "#000000" in table_block_colors and len(set(table_block_colors)) > 1,
+    str(table_block_colors),
+)
+check(
+    "退回整块标色时仍然渲染（表格分隔行不再以源码出现）",
+    "|---|" not in (block_dlg._left_preview.toPlainText() or ""),
+    block_dlg._left_preview.toPlainText()[:80],
+)
+block_dlg.close()
+
+check("预览层只读", dlg3._left_preview.isReadOnly())
+preview_text_before = dlg3._left_preview.toPlainText()
+_key = QtGui.QKeyEvent(
+    QtCore.QEvent.Type.KeyPress,
+    QtCore.Qt.Key.Key_X,
+    QtCore.Qt.KeyboardModifier.NoModifier,
+    "x",
+)
+QtWidgets.QApplication.sendEvent(dlg3._left_preview, _key)
+check("预览态输入不改内容", dlg3._left_preview.toPlainText() == preview_text_before)
+
+dlg3._goto_diff(1)
+check("预览模式导航计数更新", dlg3.lbl_diff_counter.text() == "差异 1/2", dlg3.lbl_diff_counter.text())
+check(
+    "预览导航可定位到差异槽位",
+    dlg3._left_preview.scroll_to_slot(1) and dlg3._right_preview.scroll_to_slot(5),
+)
+check("越界槽位定位返回 False", dlg3._left_preview.scroll_to_slot(99) is False)
+
+dlg3._set_display_mode("source")
+check(
+    "切回源码：显示编辑器、隐藏预览层",
+    not dlg3.left_edit.isHidden() and dlg3._left_preview.isHidden(),
+)
+check("切回源码：行号栏恢复", not dlg3.left_edit.editor()._line_number_area.isHidden())
+check(
+    "切回源码：文本与首次源码逐行一致",
+    dlg3.left_edit.toPlainText() == source_text_snapshot,
+    repr(dlg3.left_edit.toPlainText()[:80]),
+)
+check(
+    "切回源码：整行高亮恢复",
+    "#33301b"
+    in {s.format.background().color().name() for s in dlg3.left_edit.editor().extraSelections()},
+)
+dlg3.close()
+
+# 非 Markdown 内容不出现模式切换控件
+dlg_log = VersionDiffDialog(
+    name="a.log",
+    left_label="v1",
+    right_label="v2",
+    left_text="a\nb",
+    right_text="a\nc",
+    mode="log",
+)
+check("非 Markdown 不构建模式切换控件", not hasattr(dlg_log, "_mode_buttons"))
+dlg_log.close()
+
+# 切版本时保持当前模式
+_md_store = {1: md_left, 2: md_right, 3: md_left}
+dlg4 = VersionDiffDialog(
+    name="s.md",
+    left_label="v1",
+    right_label="v2",
+    left_text=_md_store[1],
+    right_text=_md_store[2],
+    mode="markdown",
+    versions=[(1, "v1"), (2, "v2"), (3, "v3")],
+    version_loader=lambda vid: _md_store.get(vid),
+    left_version_id=1,
+    right_version_id=2,
+)
+dlg4._set_display_mode("preview")
+dlg4.combo_left_ver.setCurrentIndex(dlg4.combo_left_ver.findData(3))
+check(
+    "窗口内切版本后保持预览模式",
+    dlg4._display_mode == "preview" and not dlg4._left_preview.isHidden(),
+)
+dlg4.close()
+
+# 块数超限：拒绝进入预览并给出可见原因（不静默降级）
+_big_text = "\n\n".join(f"块{i}" for i in range(MAX_PREVIEW_BLOCKS + 1))
+dlg_big = VersionDiffDialog(
+    name="big.md",
+    left_label="v1",
+    right_label="v2",
+    left_text=_big_text,
+    right_text=_big_text,
+    mode="markdown",
+)
+dlg_big._set_display_mode("preview")
+check(
+    "超限拒绝进入预览并说明原因",
+    dlg_big._display_mode == "source" and "已保持源码模式" in dlg_big._note_label.text(),
+    dlg_big._note_label.text(),
+)
+check("超限后切换控件回到源码", dlg_big._mode_buttons["source"].isChecked())
+check("超限后仍显示源码编辑器", not dlg_big.left_edit.isHidden())
+dlg_big.close()
 
 # ── 3. 对比下拉框默认值（最新 vs 上一版）────────────────────────
 panel = ui_mod.RightPanel()
@@ -315,6 +711,67 @@ try:
     )
 finally:
     history_store.add_version = _orig_add_version
+
+# ── 5. 相对路径图片：降级为占位，不报错（既有限制）────────────
+img_dlg = VersionDiffDialog(
+    name="img.md",
+    left_label="v1",
+    right_label="v2",
+    left_text="段落一\n\n![图](不存在/图片.png)\n\n段落二",
+    right_text="段落一\n\n![图](不存在/图片.png)\n\n段落二改了",
+    mode="markdown",
+)
+img_dlg._set_display_mode("preview")
+check(
+    "含相对路径图片仍能进入预览",
+    img_dlg._display_mode == "preview" and not img_dlg._left_preview.isHidden(),
+)
+check(
+    "图片不解析时其余内容照常渲染",
+    "段落一" in img_dlg._left_preview.toPlainText(),
+    img_dlg._left_preview.toPlainText()[:60],
+)
+img_dlg.close()
+
+# ── 6. 大正文：同步渲染的耗时与差异标出 ──────────────────────
+import time  # noqa: E402  （仅本段用到）
+
+# 注意：块按「空行」切分，标题与正文之间夹空行会算成两个块。这里刻意不夹空行，
+# 600 块 × ~690 字符 ≈ 414KB，用来验证「大正文进预览」的耗时与结果。
+_filler = "填充文本" * 170
+_big_blocks = [f"## 块{i}\n{_filler}" for i in range(600)]
+_big_left = "\n\n".join(_big_blocks)
+_big_right_blocks = list(_big_blocks)
+_big_right_blocks[300] = f"## 块300\n改过的内容 {_filler}"
+_big_right = "\n\n".join(_big_right_blocks)
+check(
+    "构造的大正文块数在上限内",
+    len(markdown_block_texts(_big_left)) == 600
+    and len(markdown_block_texts(_big_left)) < MAX_PREVIEW_BLOCKS,
+    str(len(markdown_block_texts(_big_left))),
+)
+
+big_dlg = VersionDiffDialog(
+    name="bigdoc.md",
+    left_label="v1",
+    right_label="v2",
+    left_text=_big_left,
+    right_text=_big_right,
+    mode="markdown",
+)
+_t0 = time.time()
+big_dlg._set_display_mode("preview")
+_elapsed = time.time() - _t0
+check(
+    "大正文可进入预览",
+    big_dlg._display_mode == "preview" and not big_dlg._right_preview.isHidden(),
+)
+check("大正文预览耗时 < 3s", _elapsed < 3.0, f"{_elapsed:.2f}s")
+check(
+    "大正文差异行仍被标出",
+    PREVIEW_BLOCK_COLORS["replace"] in _line_colors(big_dlg._right_preview),
+)
+big_dlg.close()
 
 print()
 if FAILS:
