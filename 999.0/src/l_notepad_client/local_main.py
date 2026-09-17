@@ -23,6 +23,8 @@ from pathlib import Path
 from PySide6 import QtCore, QtGui, QtNetwork, QtWidgets
 from l_qframelesswindow import L_FramelessMainWindow, LoginStore
 
+from . import clipboard_recorder
+from . import clipboard_store
 from . import file_store
 from . import server_config
 from .api_client import ApiError, LogDto, NoteDto, NotepadApi
@@ -1535,7 +1537,20 @@ def main(use_frameless: bool = True) -> int:
 
     restart_module = "l_notepad_client.local_main" if use_frameless else "l_notepad_client.local_main_ori"
 
+    def _shutdown_clipboard() -> None:
+        """停止剪贴板捕获并落盘（幂等，退出/重启前调用）。"""
+        try:
+            clipboard_recorder.stop()
+        except Exception as e:
+            lprint(f"停止剪贴板捕获失败: {e}")
+        try:
+            clipboard_store.ClipboardHistoryStore.instance().shutdown()
+        except Exception as e:
+            lprint(f"剪贴板历史落盘失败: {e}")
+
     def _restart_process() -> None:
+        # 重启前先停捕获再落盘，避免重启丢掉最后一条剪贴板记录
+        _shutdown_clipboard()
         src_dir = str(Path(__file__).resolve().parents[1])
         ok = QtCore.QProcess.startDetached(
             sys.executable,
@@ -1797,8 +1812,14 @@ def main(use_frameless: bool = True) -> int:
         hotkey_key=hotkey_key,
     )
     hotkey_ref["watcher"] = hotkey
+    # 剪贴板捕获：独立监听线程 + 单例历史存储（不依赖 GUI 线程是否空闲）
+    clipboard_store.cleanup_stale_temp_files()
+    clipboard_recorder.start(
+        clipboard_store.ClipboardHistoryStore.instance().submit_item)
+    app.aboutToQuit.connect(_shutdown_clipboard)
     win.show()
     code = int(app.exec())
+    _shutdown_clipboard()
     hotkey.release()
     ff_hotkey.stop()
     if tray is not None:

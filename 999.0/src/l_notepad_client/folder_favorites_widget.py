@@ -25,6 +25,9 @@ from PySide6 import QtCore, QtGui, QtWidgets, Shiboken
 
 from . import paths
 from . import fav_vars
+from . import clipboard_recorder
+from . import clipboard_store
+from .clipboard_store import ClipboardHistoryModel
 from pytracemp import lprint
 
 
@@ -50,7 +53,7 @@ def _favorites_copy_to_clipboard(data: dict) -> None:
             {FAV_ITEM_CLIPBOARD_MARKER: 1, "data": dict(data)},
             ensure_ascii=False,
         )
-        QtWidgets.QApplication.clipboard().setText(payload)
+        clipboard_recorder.write_to_clipboard(text=payload)
     except Exception as e:
         lprint(f"复制条目失败: {e}")
 
@@ -382,201 +385,6 @@ class RenameItemDialog(QtWidgets.QDialog):
         return self.name_input.text().strip(), self.value_input.text().strip()
 
 
-# 剪贴板历史最多保存条数（超出丢弃最旧的）
-CLIPBOARD_MAX_STORED = 2000
-
-# 剪贴板图片子目录（PNG 原图落盘，历史条目只存引用，避免 JSON 膨胀）
-CLIPBOARD_IMAGES_DIR_NAME = "clipboard_images"
-
-# 图片保存前的最长边上限（超过则等比缩放，防止超大截图撑爆磁盘）
-CLIPBOARD_IMAGE_MAX_SIDE = 4096
-
-
-class ClipboardHistoryModel(QtCore.QAbstractListModel):
-    """剪贴板历史数据模型（配合 QListView 虚拟化渲染）。
-
-    QListView 只渲染可见行，因此无论历史多大都不会卡顿，
-    去掉了原先的「分批加载更多」逻辑。去重用 set 维护，查找 O(1)。
-
-    支持三种条目（kind）：
-    - ``text``：纯文本 ``{kind, text, time}``
-    - ``image``：图片 ``{kind, text, time, md5, image_path, width, height}``，
-      PNG 原图落盘到 ``favorites_dir/clipboard_images/{md5}.png``，历史只存引用
-    - ``file``：复制文件/文件夹 ``{kind, text, time, files, count}``
-    """
-
-    TextRole = QtCore.Qt.UserRole            # 主文本（text / 文件展示名 / "[图片]"）
-    KindRole = QtCore.Qt.UserRole + 1        # kind: text / image / file
-    ImagePathRole = QtCore.Qt.UserRole + 2   # image: PNG 绝对路径
-    FilesRole = QtCore.Qt.UserRole + 3       # file: 文件路径列表
-    TimeRole = QtCore.Qt.UserRole + 4        # 记录时间
-    SearchRole = QtCore.Qt.UserRole + 5      # 搜索过滤用的文本
-    ItemRole = QtCore.Qt.UserRole + 6        # 整条 dict（右键/双击用）
-
-    def __init__(self, items: list[dict] | None = None, parent=None) -> None:
-        super().__init__(parent)
-        self._items: list[dict] = list(items) if items else []
-        self._key_set: set[tuple] = {self._dedupe_key(it) for it in self._items}
-
-    # ---- 去重键：按 kind 区分 ----
-    @staticmethod
-    def _dedupe_key(item: dict) -> tuple:
-        kind = item.get("kind", "text") if isinstance(item, dict) else "text"
-        if kind == "image":
-            return ("image", str(item.get("md5", "") or ""))
-        if kind == "file":
-            files = sorted(str(f) for f in (item.get("files", []) or []))
-            return ("file", "|".join(files))
-        return ("text", str(item.get("text", "") or ""))
-
-    # ---- Qt model 接口 ----
-    def items(self) -> list[dict]:
-        """条目列表（浅拷贝，供纯 Python 快速统计，避免逐行走 Qt 接口）。"""
-        return list(self._items)
-
-    def rowCount(self, parent=QtCore.QModelIndex()) -> int:
-        if parent.isValid():
-            return 0
-        return len(self._items)
-
-    def data(self, index: QtCore.QModelIndex, role=QtCore.Qt.DisplayRole):
-        if not index.isValid() or not (0 <= index.row() < len(self._items)):
-            return None
-        item = self._items[index.row()]
-        kind = item.get("kind", "text")
-        text = str(item.get("text", "") or "")
-        time_str = str(item.get("time", "") or "")
-        if role == QtCore.Qt.DisplayRole:
-            if kind == "image":
-                w = int(item.get("width", 0) or 0)
-                h = int(item.get("height", 0) or 0)
-                t = text if (text and text != "[图片]") else ""
-                if len(t) > 24:
-                    t = t[:24] + "…"
-                if t:
-                    return f"[{time_str}] [图片] {w}×{h} {t}"
-                return f"[{time_str}] [图片] {w}×{h}"
-            if kind == "file":
-                files = item.get("files", []) or []
-                if len(files) == 1:
-                    return f"[{time_str}] 📄 {os.path.basename(files[0])}"
-                return f"[{time_str}] 📁 {len(files)} 个文件"
-            return f"[{time_str}] {text}"
-        if role == QtCore.Qt.ToolTipRole:
-            if kind == "image":
-                p = item.get("image_path", "")
-                if text and text != "[图片]":
-                    return f"[图片] {time_str}\n{p}\n{text}"
-                return f"[图片] {time_str}\n{p}"
-            if kind == "file":
-                return "\n".join(item.get("files", []) or [])
-            return text
-        if role == self.TextRole:
-            return text
-        if role == self.KindRole:
-            return kind
-        if role == self.ImagePathRole:
-            return item.get("image_path", "")
-        if role == self.FilesRole:
-            return list(item.get("files", []) or [])
-        if role == self.TimeRole:
-            return time_str
-        if role == self.SearchRole:
-            if kind == "image":
-                if text and text != "[图片]":
-                    return "[图片] " + text
-                return "[图片]"
-            if kind == "file":
-                parts = [os.path.basename(f) for f in (item.get("files", []) or [])]
-                parts.extend(item.get("files", []) or [])
-                return " ".join(parts)
-            return text
-        if role == self.ItemRole:
-            return item
-        return None
-
-    # ---- 业务接口 ----
-    def items(self) -> list[dict]:
-        return self._items
-
-    def contains_key(self, key: tuple) -> bool:
-        return key in self._key_set
-
-    def prepend(self, item: dict, max_stored: int = CLIPBOARD_MAX_STORED) -> None:
-        """插入到最前；已存在同 key 则忽略；超出上限时裁剪最旧的若干条。"""
-        key = self._dedupe_key(item)
-        if key in self._key_set:
-            return
-        self.beginInsertRows(QtCore.QModelIndex(), 0, 0)
-        self._items.insert(0, item)
-        self._key_set.add(key)
-        self.endInsertRows()
-        if len(self._items) > max_stored:
-            start, end = max_stored, len(self._items) - 1
-            self.beginRemoveRows(QtCore.QModelIndex(), start, end)
-            for dropped in self._items[max_stored:]:
-                self._key_set.discard(self._dedupe_key(dropped))
-            del self._items[max_stored:]
-            self.endRemoveRows()
-
-    def remove_key(self, key: tuple) -> dict | None:
-        """删除指定 key 的条目，返回被删除的条目（无则 None）。"""
-        for i, it in enumerate(self._items):
-            if self._dedupe_key(it) == key:
-                self.beginRemoveRows(QtCore.QModelIndex(), i, i)
-                removed = self._items.pop(i)
-                self._key_set.discard(key)
-                self.endRemoveRows()
-                return removed
-        return None
-
-    def reset_items(self, items: list[dict]) -> None:
-        self.beginResetModel()
-        self._items = list(items)
-        self._key_set = {self._dedupe_key(it) for it in self._items}
-        self.endResetModel()
-
-    def clear(self) -> None:
-        self.reset_items([])
-
-    def dedupe(self) -> int:
-        """同 key 只保留最新一条（保持时间倒序）。返回移除条数。"""
-        seen: set[tuple] = set()
-        deduped: list[dict] = []
-        for it in self._items:
-            key = self._dedupe_key(it)
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(it)
-        removed = len(self._items) - len(deduped)
-        if removed > 0:
-            self.reset_items(deduped)
-        return removed
-
-    def update_item_at(self, row: int, item: dict) -> bool:
-        """更新指定行内容。新 key 与其它行冲突时删除当前行（去重）。
-
-        返回 True 表示已更新；False 表示因冲突删除了该行。
-        """
-        if not (0 <= row < len(self._items)):
-            return False
-        old_key = self._dedupe_key(self._items[row])
-        new_key = self._dedupe_key(item)
-        if new_key != old_key and new_key in self._key_set:
-            # 新内容已存在于其它行 → 删除当前行去重
-            self.remove_key(old_key)
-            return False
-        if new_key != old_key:
-            self._key_set.discard(old_key)
-            self._key_set.add(new_key)
-        self._items[row] = item
-        self.dataChanged.emit(
-            self.index(row, 0), self.index(row, 0),
-            [QtCore.Qt.DisplayRole, self.TextRole, self.SearchRole,
-             QtCore.Qt.ToolTipRole],
-        )
-        return True
 
 
 # 文件行图标提供者（共享实例，避免每行重复创建）
@@ -972,6 +780,43 @@ class ImageHoverPreview(QtCore.QObject):
                 pass
 
 
+class ClipboardKindFilterProxy(QtCore.QSortFilterProxyModel):
+    """剪贴板历史代理：搜索词 + 条目类型（kind）双重过滤。
+
+    ``super().filterAcceptsRow`` 处理搜索词（``SearchRole``），本类再叠加 kind 过滤，
+    两个条件同时满足才可见。
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._kind: Optional[str] = None
+
+    def kind_filter(self) -> Optional[str]:
+        return self._kind
+
+    def set_kind_filter(self, kind: Optional[str]) -> None:
+        """None=全部；否则只显示该 kind（text / image / file）的条目。"""
+        kind = kind or None
+        if kind == self._kind:
+            return
+        self._kind = kind
+        self.invalidateFilter()
+
+    def filterAcceptsRow(
+        self, source_row: int, source_parent: QtCore.QModelIndex
+    ) -> bool:
+        if not super().filterAcceptsRow(source_row, source_parent):
+            return False
+        if self._kind is None:
+            return True
+        model = self.sourceModel()
+        if model is None:
+            return True
+        index = model.index(source_row, 0, source_parent)
+        kind = str(index.data(ClipboardHistoryModel.KindRole) or "text")
+        return kind == self._kind
+
+
 class ClipboardHistoryPopup(QtWidgets.QFrame):
     """Win+V 弹出的「仅剪贴板历史」小窗口。
 
@@ -1007,7 +852,8 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
         self._caller_hwnd: int = 0
         self._count_label: Optional[QtWidgets.QLabel] = None
         self._search: Optional[QtWidgets.QLineEdit] = None
-        self._proxy: Optional[QtCore.QSortFilterProxyModel] = None
+        self._kind_combo: Optional[QtWidgets.QComboBox] = None
+        self._proxy: Optional[ClipboardKindFilterProxy] = None
         self._list: Optional[QtWidgets.QListView] = None
         # 无边框拖动状态
         self._dragging: bool = False
@@ -1031,6 +877,17 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
             }
             QListView#popup_list::item { min-height: 16px; }
             QListView#popup_list::item:selected { background-color: #3a3a3a; }
+            QComboBox#popup_kind_filter {
+                background-color: #1e1e1e; border: 1px solid #3c3c3c;
+                border-radius: 4px; color: #d4d4d4; padding: 0 2px 0 5px;
+                font-size: 11px;
+            }
+            QComboBox#popup_kind_filter::drop-down { border: none; width: 12px; }
+            QComboBox#popup_kind_filter QAbstractItemView {
+                background-color: #1e1e1e; border: 1px solid #3c3c3c;
+                color: #d4d4d4; font-size: 11px; outline: none;
+                selection-background-color: #3a3a3a;
+            }
             QToolButton { color: #cccccc; border: none; background: transparent; }
             QToolButton:hover { background: rgba(255,255,255,0.1); border-radius: 4px; }
             """
@@ -1054,6 +911,18 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
         title.setStyleSheet("font-size: 13px; font-weight: bold;")
         self._count_label = QtWidgets.QLabel("0 条")
         self._count_label.setStyleSheet("color: #89DDFF; font-size: 11px;")
+        # 类型过滤（清除按钮左侧）：全部 / 文字 / 图片 / 文件
+        self._kind_combo = QtWidgets.QComboBox()
+        self._kind_combo.setObjectName("popup_kind_filter")
+        for label, kind in (("全部", None), ("文字", "text"),
+                            ("图片", "image"), ("文件", "file")):
+            self._kind_combo.addItem(label, kind)
+        self._kind_combo.setFixedWidth(66)
+        self._kind_combo.setToolTip("按条目类型过滤（每次呼出重置为「全部」）")
+        # 不抢键盘焦点：点击仍可展开下拉，上下键/回车继续用于列表浏览与回填
+        self._kind_combo.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self._kind_combo.view().setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self._kind_combo.currentIndexChanged.connect(self._on_kind_changed)
         clear_btn = QtWidgets.QToolButton()
         clear_btn.setText("🗑 清除")
         clear_btn.setToolTip("清除全部历史")
@@ -1065,6 +934,7 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
         title_row.addWidget(title)
         title_row.addStretch(1)
         title_row.addWidget(self._count_label)
+        title_row.addWidget(self._kind_combo)
         title_row.addWidget(clear_btn)
         title_row.addWidget(close_btn)
         lay.addLayout(title_row)
@@ -1076,7 +946,7 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
         self._search.textChanged.connect(self._on_search)
         lay.addWidget(self._search)
 
-        self._proxy = QtCore.QSortFilterProxyModel(self)
+        self._proxy = ClipboardKindFilterProxy(self)
         self._proxy.setFilterCaseSensitivity(QtCore.Qt.CaseInsensitive)
         self._proxy.setFilterRole(ClipboardHistoryModel.SearchRole)
 
@@ -1113,6 +983,9 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
             self._proxy.setSourceModel(self._source.clipboard_model)
         if self._search is not None:
             self._search.clear()
+        if self._kind_combo is not None:
+            # 呼出即回到「全部」，与清空搜索框一致，避免"历史怎么少了"的困惑
+            self._kind_combo.setCurrentIndex(0)
         self._update_count()
         # 按内容撑高（内部自取真实尺寸），再按光标避让摆放
         self._fit_height_to_content()
@@ -1199,7 +1072,10 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
             return
         chrome = max(60, self.height() - self._list.height())
         max_h = self.maximumHeight()
-        if self._proxy.filterRegularExpression().pattern():
+        # 类型过滤也属于"已过滤"：否则选了「图片」但搜索框为空时会走未过滤
+        # 快速累加路径，把全部条目高度算进来（窗口虚高且不随过滤收敛）
+        if self._proxy.filterRegularExpression().pattern() or (
+                self._proxy.kind_filter() is not None):
             n = self._proxy.rowCount()
             if n <= 0:
                 return
@@ -1223,11 +1099,24 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
             self.resize(self.width(), want)
 
     def _update_count(self) -> None:
-        if self._count_label is not None:
-            self._count_label.setText(f"{self._proxy.rowCount()} 条")
+        if self._count_label is None or self._proxy is None:
+            return
+        matched = self._proxy.rowCount()
+        total = self._source.clipboard_model.rowCount()
+        if matched != total:
+            self._count_label.setText(f"匹配 {matched}/{total} 条")
+        else:
+            self._count_label.setText(f"{total} 条")
 
     def _on_search(self, text: str) -> None:
         self._proxy.setFilterFixedString(text.strip())
+        self._update_count()
+
+    def _on_kind_changed(self, index: int) -> None:
+        """类型过滤变化：只刷新过滤结果与计数，不重建列表。"""
+        if self._kind_combo is None or self._proxy is None:
+            return
+        self._proxy.set_kind_filter(self._kind_combo.itemData(index))
         self._update_count()
 
     # ── 查看/编辑 ──
@@ -1295,9 +1184,7 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
             lprint(f"发送粘贴快捷键失败: {e}")
 
     def _clear_all(self) -> None:
-        self._source.clipboard_model.clear()
-        self._source._clear_clipboard_image_dir()
-        self._source._schedule_save_clipboard()
+        self._source._clear_clipboard_history_now()
         self._update_count()
 
     # ── 右键菜单 ──
@@ -1424,6 +1311,10 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
 
     def _maybe_hide(self) -> None:
         try:
+            # 下拉框列表 / 右键菜单等 Qt 弹出部件打开期间不能隐藏：它们会把
+            # activeWindow 抢走，否则点开过滤下拉框时弹窗会自己消失
+            if QtWidgets.QApplication.activePopupWidget() is not None:
+                return
             if QtWidgets.QApplication.activeWindow() is not self:
                 self.hide()
         except Exception:
@@ -1664,9 +1555,7 @@ class ClipboardItemEditorDialog(QtWidgets.QDialog):
     def _save(self) -> None:
         new_item = dict(self._item)
         new_item["text"] = self._collect_text()
-        ok = self._source.clipboard_model.update_item_at(self._row, new_item)
-        if ok:
-            self._source._schedule_save_clipboard()
+        self._source._store.update_item_at(self._row, new_item)
         self.accept()
 
     def _copy(self) -> None:
@@ -1936,29 +1825,18 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
 
     # Ctrl+中键识别到调用程序/地址栏路径后发出，用于更新自定义标题栏文本
     caller_info_changed = QtCore.Signal(str)
-    # 剪贴板历史后台加载完成（携带 list[dict]），用于在主线程重建 model
-    _clipboard_loaded_signal = QtCore.Signal(object)
     # 网址 favicon 后台抓取完成（携带 (key, url, icon_url, data, content_type)）
     _url_icon_done_signal = QtCore.Signal(object)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None, restart_callback=None) -> None:
         super().__init__(parent)
         self._restart_callback = restart_callback  # 保存重启回调（兼容现有调用）
-        self._last_clipboard_text = ""  # 上一次剪贴板内容
-        # 上一次剪贴板内容签名（kind+key），用于图片/文件/文本统一去重防抖
-        self._last_clipboard_key: tuple = ("", "")
         self._explorer_hwnd = None  # 收藏夹导航的资源管理器窗口句柄
         self._caller_program = ""    # Ctrl+中键唤起时的调用程序名（如 explorer.exe）
         self._caller_path = ""       # 调用者地址栏当前文件夹路径（仅 Explorer 可读）
         self._filter_index = 0       # 显示筛选：0=全部 1=文件夹 2=网址 3=命令
         self._favorites_kind = "folder"  # 收藏种类：folder=文件夹收藏(全部) / url=网址收藏(独立文件)
         self._ui_initialized = False
-        self._clipboard_connected = False
-        # 写盘防抖：剪贴板变化频繁时合并多次写入，避免阻塞 UI
-        self._clipboard_save_timer = QtCore.QTimer(self)
-        self._clipboard_save_timer.setSingleShot(True)
-        self._clipboard_save_timer.setInterval(800)
-        self._clipboard_save_timer.timeout.connect(self._save_clipboard_history)
         self._cloud_api = None  # NotepadApi（带登录 token）；None=未登录（云 item 隐藏）
         self._setup_data()
         # 列表行号 → 收藏 dict（真实对象）映射，随 _refresh_list 重建。
@@ -2034,10 +1912,8 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         self._setup_ui()
         self._refresh_list()
         self._refresh_clipboard_display()
-        clipboard = QtWidgets.QApplication.clipboard()
-        if not self._clipboard_connected:
-            clipboard.dataChanged.connect(self._on_clipboard_changed)
-            self._clipboard_connected = True
+        # 历史内容由单例 store 驱动：模型信号自动传到各自的过滤代理与列表
+        self._store.historyChanged.connect(self._update_clipboard_count_label)
 
     # ── 云同步（收藏项存数据库，仅登录后可用）──
     def set_cloud_api(self, api) -> None:
@@ -2293,12 +2169,10 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         self.favorites_dir = paths.favorites_dir()
         self.favorites_file = self.favorites_dir / self._favorites_filename()
         self.favorites: list[FavoriteItem] = self._load_favorites()
-        # 剪贴板历史：先放占位空 model，真实数据由后台线程加载后回主线程重建
-        # （2000 条 JSON 解析不占主线程；model 是 QObject 不能跨线程创建）
-        self._clipboard_file = self.favorites_dir / "clipboard_history.json"
-        self.clipboard_model = ClipboardHistoryModel([])
-        self._clipboard_loaded_signal.connect(self._on_clipboard_history_loaded)
-        self._load_clipboard_history_async()
+        # 剪贴板历史由单例 store 持有（唯一模型 + 唯一写盘线程）：三个收藏面板
+        # 共享同一份历史，不再各存一份内存副本、也不各自写同一个 JSON
+        self._store = clipboard_store.ClipboardHistoryStore.instance()
+        self.clipboard_model = self._store.model
         # 空闲时预热剪贴板弹窗：把首次显示的大列表布局成本移出 Win+V 热键路径
         QtCore.QTimer.singleShot(2000, self._prewarm_clipboard_popup)
 
@@ -2397,67 +2271,6 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
                 json.dump(self.favorites, f, ensure_ascii=False, indent=2)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "错误", f"保存收藏夹失败: {e}")
-
-    def _read_clipboard_history(self) -> list[dict]:
-        """读取剪贴板历史（纯 IO+JSON，可在后台线程调用；不建 QObject）。"""
-        if self._clipboard_file.exists():
-            try:
-                with open(self._clipboard_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        items: list[dict] = []
-                        for it in data:
-                            if not isinstance(it, dict):
-                                continue
-                            it = dict(it)
-                            if "kind" not in it:
-                                it["kind"] = "text"
-                            items.append(it)
-                        return items[:CLIPBOARD_MAX_STORED]
-            except Exception as e:
-                lprint(f"加载剪贴板历史失败: {e}")
-        return []
-
-    def _load_clipboard_history_async(self) -> None:
-        """后台线程加载剪贴板历史，完成后回主线程重建 model（不阻塞启动）。"""
-        import threading
-
-        def _work() -> None:
-            items = self._read_clipboard_history()
-            self._clipboard_loaded_signal.emit(items)
-
-        threading.Thread(target=_work, daemon=True).start()
-
-    @QtCore.Slot(object)
-    def _on_clipboard_history_loaded(self, items: list) -> None:
-        """后台加载完成：在主线程重建 model（QObject 必须留在主线程）。"""
-        if not isinstance(items, list):
-            return
-        existing = self.clipboard_model.items() if self.clipboard_model else []
-        # 加载期间可能已有新剪贴板项写入占位空 model（概率极低），新项置前
-        if existing:
-            items = existing + items
-        self.clipboard_model = ClipboardHistoryModel(items)
-        # model 已被替换，必须重新绑定代理/列表；否则 QListView 仍显示旧的
-        # 空占位 model，导致剪贴板历史页面一直为空（只会在 count 标签出数字）。
-        proxy = getattr(self, "_clipboard_proxy", None)
-        if proxy is not None:
-            proxy.setSourceModel(self.clipboard_model)
-        self._update_clipboard_count_label()
-
-    def _save_clipboard_history(self) -> None:
-        """保存剪贴板历史记录（由防抖 timer 触发，避免频繁同步写盘）"""
-        try:
-            with open(self._clipboard_file, "w", encoding="utf-8") as f:
-                json.dump(
-                    self.clipboard_model.items(), f, ensure_ascii=False, indent=2
-                )
-        except Exception as e:
-            lprint(f"保存剪贴板历史失败: {e}")
-
-    def _schedule_save_clipboard(self) -> None:
-        """请求一次写盘（防抖：800ms 内的多次请求合并为一次）。"""
-        self._clipboard_save_timer.start()
 
     def _setup_ui(self) -> None:
         """初始化UI。优先复用 main_window.ui 中定义的控件。"""
@@ -3203,8 +3016,7 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
 
             # 4. 找不到 Edit 控件（Windows 11 XAML 地址栏），回退到剪贴板 + 粘贴方式
             lprint(f"  未找到 Edit 控件，回退到剪贴板粘贴方式")
-            clipboard = QtWidgets.QApplication.clipboard()
-            clipboard.setText(folder_path)
+            clipboard_recorder.write_to_clipboard(text=folder_path)
             time.sleep(0.05)
             # Ctrl+A 全选地址栏现有内容（防止路径被追加到末尾）
             user32.keybd_event(0x11, 0, 0, 0)  # VK_CONTROL down
@@ -3452,14 +3264,12 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
 
     def _copy_path_to_clipboard(self, path: str) -> None:
         """将路径复制到剪贴板"""
-        clipboard = QtWidgets.QApplication.clipboard()
-        clipboard.setText(path)
+        clipboard_recorder.write_to_clipboard(text=path)
         lprint(f"已复制路径到剪贴板: {path}")
 
     def _copy_name_to_clipboard(self, name: str) -> None:
         """将名称复制到剪贴板"""
-        clipboard = QtWidgets.QApplication.clipboard()
-        clipboard.setText(name)
+        clipboard_recorder.write_to_clipboard(text=name)
         lprint(f"已复制名称到剪贴板: {name}")
 
     def _rename_item(self, fav: dict) -> None:
@@ -3549,173 +3359,11 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
     # ===== 剪贴板历史相关方法 =====
 
     def _refresh_clipboard_display(self) -> None:
-        """初始化时刷新剪贴板显示（QListView 由 model 驱动，无需手动建项）"""
+        """刷新剪贴板显示（模型由单例 store 驱动，此处只需刷新计数与过滤）。"""
         self._update_clipboard_count_label()
-        # 初始化当前剪贴板内容
-        clipboard = QtWidgets.QApplication.clipboard()
-        self._last_clipboard_text = clipboard.text().strip()
-        self._last_clipboard_key = ("", "")
-
-    def _clipboard_key(self, item: dict) -> tuple:
-        """剪贴板条目去重键（与模型一致）。"""
-        return ClipboardHistoryModel._dedupe_key(item)
-
-    def _snapshot_clipboard_item(self) -> dict | None:
-        """读取系统剪贴板并生成一条历史条目。
-
-        优先级：图片 > 文件 > 文本。无可记录内容返回 None。
-        """
-        clipboard = QtWidgets.QApplication.clipboard()
-        mime = clipboard.mimeData()
-        # 1) 图片（剪贴板可能图文并存，如从浏览器/Word 复制图文）
-        try:
-            if mime.hasImage():
-                image = clipboard.image()
-                if not image.isNull():
-                    text = ""
-                    try:
-                        t = clipboard.text()
-                        if t and t.strip():
-                            text = t.strip()
-                    except Exception:
-                        pass
-                    return self._build_image_item(image, text=text)
-        except Exception as e:
-            lprint(f"读取剪贴板图片失败: {e}")
-        # 2) 本地文件 / 文件夹
-        if mime.hasUrls():
-            files = []
-            for u in mime.urls():
-                try:
-                    local = u.toLocalFile()
-                except Exception:
-                    local = ""
-                if local and os.path.exists(local):
-                    files.append(os.path.normpath(local))
-            if files:
-                return self._build_file_item(files)
-        # 3) 文本
-        try:
-            text = clipboard.text()
-        except Exception as e:
-            lprint(f"读取剪贴板文本失败: {e}")
-            return None
-        if text is not None:
-            text = text.strip()
-            if text:
-                return {
-                    "kind": "text",
-                    "text": text,
-                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
-        return None
-
-    def _build_image_item(self, image, text: str = "") -> dict | None:
-        """图片条目：PNG 原图落盘到 clipboard_images/{md5}.png，历史只存引用。
-
-        若剪贴板同时含文字（图文混排复制），一并保存到 text 字段供预览/搜索。
-        """
-        if image.isNull():
-            return None
-        # 超长边等比缩放，防止超大截图撑爆磁盘
-        if max(image.width(), image.height()) > CLIPBOARD_IMAGE_MAX_SIDE:
-            image = image.scaled(
-                CLIPBOARD_IMAGE_MAX_SIDE, CLIPBOARD_IMAGE_MAX_SIDE,
-                QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation,
-            )
-        ba = QtCore.QByteArray()
-        buf = QtCore.QBuffer(ba)
-        buf.open(QtCore.QIODevice.OpenModeFlag.WriteOnly)
-        try:
-            if not image.save(buf, "PNG"):
-                return None
-        finally:
-            buf.close()
-        data = bytes(ba)
-        if not data:
-            return None
-        md5 = hashlib.md5(data).hexdigest()[:16]
-        img_dir = self.favorites_dir / CLIPBOARD_IMAGES_DIR_NAME
-        img_dir.mkdir(parents=True, exist_ok=True)
-        img_path = img_dir / f"{md5}.png"
-        if not img_path.exists():
-            try:
-                img_path.write_bytes(data)
-            except OSError as e:
-                lprint(f"保存剪贴板图片失败: {e}")
-                return None
-        # 顺带预生成 46px 小缩略图（{md5}_t.png），渲染缩略图时避免读 4096px 大图
-        self._write_thumb_file(img_path, image)
-        # 图文并存时保存真实文本（截断防历史 JSON 过大），否则用占位符
-        display_text = "[图片]"
-        if text and text.strip():
-            display_text = text.strip()
-            if len(display_text) > 500:
-                display_text = display_text[:500] + "…"
-        return {
-            "kind": "image",
-            "text": display_text,
-            "md5": md5,
-            "image_path": str(img_path),
-            "width": image.width(),
-            "height": image.height(),
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-
-    @staticmethod
-    def _write_thumb_file(img_path, image, size: int = 46) -> None:
-        """生成小缩略图文件（{stem}_t.png），供历史面板/弹窗渲染用。失败静默。"""
-        try:
-            thumb_path = f"{os.path.splitext(str(img_path))[0]}_t.png"
-            if os.path.exists(thumb_path):
-                return
-            if max(image.width(), image.height()) > size:
-                image = image.scaled(
-                    size, size,
-                    QtCore.Qt.KeepAspectRatio,
-                    QtCore.Qt.SmoothTransformation,
-                )
-            image.save(thumb_path, "PNG")
-        except Exception:
-            pass
-
-    def _build_file_item(self, files: list) -> dict:
-        """文件条目：保存本地文件/文件夹路径列表。"""
-        files = [os.path.normpath(f) for f in files]
-        if len(files) == 1:
-            display = os.path.basename(files[0]) or files[0]
-        else:
-            display = f"{len(files)} 个文件"
-        return {
-            "kind": "file",
-            "text": display,
-            "files": list(files),
-            "count": len(files),
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-
-    def _on_clipboard_changed(self) -> None:
-        """剪贴板内容变化时的回调（Qt 信号驱动）：记录文本 / 图片 / 文件。"""
-        if not hasattr(self, "clipboard_model"):
-            return
-        try:
-            item = self._snapshot_clipboard_item()
-        except Exception as e:
-            lprint(f"读取剪贴板失败: {e}")
-            self._last_clipboard_key = ("", "")
-            return
-        if item is None:
-            self._last_clipboard_key = ("", "")
-            return
-        key = self._clipboard_key(item)
-        # 与上次相同（防抖）或已在历史中 → 跳过
-        if key == self._last_clipboard_key or self.clipboard_model.contains_key(key):
-            self._last_clipboard_key = key
-            return
-        self.clipboard_model.prepend(item, CLIPBOARD_MAX_STORED)
-        self._schedule_save_clipboard()
-        self._update_clipboard_count_label()
-        self._last_clipboard_key = key
+        proxy = getattr(self, "_clipboard_proxy", None)
+        if proxy is not None:
+            proxy.invalidateFilter()
 
     def _on_clipboard_search_changed(self, text: str) -> None:
         """搜索框内容变化：交给代理模型过滤（虚拟化渲染，无需手动建项）。"""
@@ -3734,12 +3382,11 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
             self.clipboard_count_label.setText(f"{total} 条")
 
     def _dedupe_clipboard_history(self) -> None:
-        """清理重复：相同文本只保留最新一条（保持时间倒序）。"""
-        removed = self.clipboard_model.dedupe()
+        """清理重复：相同内容只保留最新一条（保持时间倒序）。"""
+        removed = self._store.dedupe()
         if removed <= 0:
             QtWidgets.QMessageBox.information(self, "清理重复", "没有发现重复记录。")
             return
-        self._schedule_save_clipboard()
         self._update_clipboard_count_label()
         lprint(f" 已清理 {removed} 条重复剪贴板记录")
 
@@ -3795,7 +3442,8 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         if not img_path or not os.path.exists(img_path):
             return
         try:
-            QtWidgets.QApplication.clipboard().setImage(QtGui.QImage(img_path))
+            clipboard_recorder.write_to_clipboard(
+                image=QtGui.QImage(img_path))
         except Exception as e:
             lprint(f"复制图片失败: {e}")
 
@@ -3820,10 +3468,7 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         """把历史文件重新放回系统剪贴板（用于粘贴到资源管理器等）。"""
         if not files:
             return
-        urls = [QtCore.QUrl.fromLocalFile(f) for f in files]
-        mime = QtCore.QMimeData()
-        mime.setUrls(urls)
-        QtWidgets.QApplication.clipboard().setMimeData(mime)
+        clipboard_recorder.write_to_clipboard(files=list(files))
 
     def _open_files_location(self, files: list) -> None:
         """在资源管理器中定位文件/文件夹（Windows）。"""
@@ -3846,25 +3491,21 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         if not item:
             return
         kind = item.get("kind", "text")
-        clipboard = QtWidgets.QApplication.clipboard()
         if kind == "image":
             img_path = item.get("image_path", "")
             if not img_path or not os.path.exists(img_path):
                 return
-            clipboard.setImage(QtGui.QImage(img_path))
+            clipboard_recorder.write_to_clipboard(image=QtGui.QImage(img_path))
         elif kind == "file":
             files = list(item.get("files", []) or [])
             if not files:
                 return
-            urls = [QtCore.QUrl.fromLocalFile(f) for f in files]
-            mime = QtCore.QMimeData()
-            mime.setUrls(urls)
-            clipboard.setMimeData(mime)
+            clipboard_recorder.write_to_clipboard(files=files)
         else:
             text = str(item.get("text", "") or "")
             if not text:
                 return
-            clipboard.setText(text)
+            clipboard_recorder.write_to_clipboard(text=text)
 
     def _use_clipboard_item(self, index: QtCore.QModelIndex) -> None:
         """双击使用剪贴板项：恢复对应类型到系统剪贴板，填入调用窗口并隐藏本窗口。"""
@@ -3946,45 +3587,13 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
 
     def _delete_clipboard_item(self, item: dict) -> None:
         """删除单条剪贴板记录（同时清理不再被引用的图片文件）"""
-        removed = self.clipboard_model.remove_key(self._clipboard_key(item))
-        if removed is not None:
-            self._cleanup_orphan_image_files()
-            self._schedule_save_clipboard()
+        if self._store.remove_item(item):
             self._update_clipboard_count_label()
 
-    def _cleanup_orphan_image_files(self) -> None:
-        """删除不再被任何历史条目引用的图片缓存文件。"""
-        referenced = {
-            str(it.get("image_path", ""))
-            for it in self.clipboard_model.items()
-            if it.get("kind") == "image" and it.get("image_path")
-        }
-        img_dir = self.favorites_dir / CLIPBOARD_IMAGES_DIR_NAME
-        if not img_dir.is_dir():
-            return
-        try:
-            for f in img_dir.iterdir():
-                if f.is_file() and str(f) not in referenced:
-                    try:
-                        f.unlink()
-                    except OSError:
-                        pass
-        except OSError:
-            pass
-
-    def _clear_clipboard_image_dir(self) -> None:
-        """删除全部图片缓存文件（清除历史时调用）。"""
-        img_dir = self.favorites_dir / CLIPBOARD_IMAGES_DIR_NAME
-        if not img_dir.is_dir():
-            return
-        try:
-            for f in img_dir.iterdir():
-                try:
-                    f.unlink()
-                except OSError:
-                    pass
-        except OSError:
-            pass
+    def _clear_clipboard_history_now(self) -> None:
+        """立即清空剪贴板历史（无确认；供弹窗使用）。"""
+        self._store.clear()
+        self._update_clipboard_count_label()
 
     def _clear_clipboard_history(self) -> None:
         """清除剪贴板历史（连同图片缓存文件一起删除）"""
@@ -3998,20 +3607,13 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
             QtWidgets.QMessageBox.No,
         )
         if reply == QtWidgets.QMessageBox.Yes:
-            self.clipboard_model.clear()
-            self._clear_clipboard_image_dir()
-            self._schedule_save_clipboard()
+            self._store.clear()
             self._update_clipboard_count_label()
             lprint(" 剪贴板历史已清除")
 
-    def _flush_clipboard_save(self) -> None:
-        """若有挂起的防抖写盘请求，立即落盘（用于隐藏/关闭前）。"""
-        if self._clipboard_save_timer.isActive():
-            self._clipboard_save_timer.stop()
-            self._save_clipboard_history()
-
     def hideEvent(self, event: QtGui.QHideEvent) -> None:
-        self._flush_clipboard_save()
+        # 收起面板时请求立刻落盘（写盘在 store 的写盘线程，不阻塞界面）
+        self._store.request_save(immediate=True)
         # 主面板隐藏时一并收起悬停预览浮层
         prev = getattr(self, "_clipboard_hover_preview", None)
         if prev is not None:
@@ -4019,5 +3621,5 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         super().hideEvent(event)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        self._flush_clipboard_save()
+        self._store.request_save(immediate=True)
         super().closeEvent(event)

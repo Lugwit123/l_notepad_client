@@ -28,6 +28,7 @@ except Exception:  # pragma: no cover - shiboken6 随 PySide6 提供，兜底避
     shiboken6 = None
 
 from .api_client import ApiError, LogDto, NotepadApi, NoteDto
+from . import clipboard_recorder
 from . import history_store
 from . import paths
 from . import server_config
@@ -1355,7 +1356,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             self.status.showMessage("没有可复制的内容", 2500)
             return
         try:
-            QtWidgets.QApplication.clipboard().setText(value)
+            clipboard_recorder.write_to_clipboard(text=value)
         except Exception as exc:
             lprint(f"复制到剪贴板失败：{exc}")
             self.status.showMessage(f"复制失败：{exc}", 4000)
@@ -2213,18 +2214,19 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
 
         action_copy_name = menu.addAction("复制文件名")
         action_copy_name.triggered.connect(
-            lambda: QtWidgets.QApplication.clipboard().setText(PurePosixPath(log_path).name)
+            lambda: clipboard_recorder.write_to_clipboard(
+                text=PurePosixPath(log_path).name)
         )
 
         action_copy_path = menu.addAction("复制日志路径")
         action_copy_path.triggered.connect(
-            lambda: QtWidgets.QApplication.clipboard().setText(log_path)
+            lambda: clipboard_recorder.write_to_clipboard(text=log_path)
         )
 
         if log_url:
             action_copy_url = menu.addAction("复制网页链接")
             action_copy_url.triggered.connect(
-                lambda: QtWidgets.QApplication.clipboard().setText(log_url)
+                lambda: clipboard_recorder.write_to_clipboard(text=log_url)
             )
 
         menu.addSeparator()

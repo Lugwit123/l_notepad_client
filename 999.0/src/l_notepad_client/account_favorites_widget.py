@@ -14,6 +14,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from pytracemp import lprint
 
+from . import clipboard_recorder
 from . import server_config
 from . import fav_vars
 from .folder_favorites_widget import (
@@ -1023,7 +1024,7 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
             return
 
         text = "\n".join(lines)
-        QtWidgets.QApplication.clipboard().setText(text)
+        clipboard_recorder.write_to_clipboard(text=text)
         QtWidgets.QMessageBox.information(
             self, "已复制", f"账号信息已复制到剪贴板：\n\n{text}"
         )
@@ -1032,7 +1033,7 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
         """复制单个字段值到剪贴板"""
         if not value:
             return
-        QtWidgets.QApplication.clipboard().setText(value)
+        clipboard_recorder.write_to_clipboard(text=value)
 
     def _shorten_for_menu(self, value: str, maxlen: int = 24) -> str:
         """菜单名中展示字段值；过长时截断避免菜单过宽（仅影响显示，复制内容不受影响）"""
