@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # === wuwo doc_pkg BEGIN v7 (auto-generated, do not edit) ===
 # 包：l_notepad_client 999.0  L Notepad PySide6 desktop client: local/offline notes + HTTP to l_notepad_server
-# 依赖：python-3.12.10, pyside6, l_qframelesswindow, l_qt_wgt_lib, pytracemp, lugwit_baidu_netdisk
+# 依赖：python-3.12.10, pyside6, l_qframelesswindow, l_qt_wgt_lib, pytracemp
 # 提供：PYTHONPATH {root}/src；env L_NOTEPAD_ROOT；PYTHONIOENCODING=utf-8
 # 入口：l_notepad_client, l_notepad_ori
 # 用法：wuwo l_notepad_client 进入该包环境；wuwor l_notepad_client -- l_notepad_client 直接调用别名
@@ -43,7 +43,6 @@ requires = [
     "l_qframelesswindow",
     "l_qt_wgt_lib",
     "pytracemp",
-    "lugwit_baidu_netdisk",
 ]
 
 build_command = False

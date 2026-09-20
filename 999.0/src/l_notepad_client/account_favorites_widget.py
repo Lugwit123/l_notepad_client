@@ -15,7 +15,6 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from pytracemp import lprint
 
 from . import clipboard_recorder
-from . import server_config
 from . import fav_vars
 from .folder_favorites_widget import (
     attach_var_preview,
@@ -607,23 +606,24 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
         self.reload_data()
 
     def _ensure_api_token(self) -> bool:
-        """确保后端 API 携带登录凭据（Auth Service 本机免登录），失败返回 False"""
+        """确保后端 API 携带登录凭据；拿不到就返回 False（上层回退本地数据）。
+
+        **不再自己去取 token**：`/api/v1/auth/auto` 回环授权已按 P0 默认关闭，
+        未登录就是未登录。唯一例外是环境变量 `LUGWIT_ACCESS_TOKEN`（脚本/CI 场景），
+        交互式使用请在标题栏登录（登录后 `api.token` 已就位，第 613 行就返回 True）。
+        """
         if self.api is None:
             return False
         if getattr(self.api, "token", None):
             return True
-        try:
-            import urllib.request
-            _auth_url = server_config.auth_url()
-            req = urllib.request.Request(_auth_url.rstrip("/") + "/api/v1/auth/auto", method="POST")
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            token = data.get("access_token") or data.get("token")
-            if token:
-                self.api.token = token
-                return True
-        except Exception as e:
-            lprint(f"获取本机免登录 token 失败: {e}")
+        env_token = (os.environ.get("LUGWIT_ACCESS_TOKEN") or "").strip()
+        if env_token:
+            self.api.token = env_token
+            return True
+        lprint(
+            "未登录：云账号数据不可用（请先在标题栏登录；脚本场景可设 "
+            "LUGWIT_ACCESS_TOKEN）"
+        )
         return False
 
     def _try_load_from_api(self) -> bool:
