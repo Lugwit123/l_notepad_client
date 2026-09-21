@@ -1,0 +1,716 @@
+<?xml version='1.0' encoding='utf8'?>
+<nuitka-compilation-report nuitka_version="4.2.1" nuitka_commercial_version="not installed" mode="module" completion="error exit message (1)" exit_message="Failed unexpectedly in Scons C backend compilation.">
+  <scons_environment c_compiler="MinGW64" the_cc_name="gcc" the_compiler="gcc" />
+  <module name="l_notepad_client" kind="CompiledPythonPackage" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\__init__.py">
+    <optimization-time pass="1" time="0.0000" micro_passes="2" />
+    <optimization-time pass="2" time="0.0000" micro_passes="1" />
+    <code-generation-time time="0.0156" />
+    <module_usages>
+      <module_usage name="os" finding="excluded" line="1" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client._dump_explorer_uia" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\_dump_explorer_uia.py">
+    <optimization-time pass="1" time="0.0312" micro_passes="4" max_branch_merge="19" merged_total="353" />
+    <optimization-time pass="2" time="0.0000" micro_passes="1" max_branch_merge="19" merged_total="92" />
+    <code-generation-time time="0.0156" />
+    <module_usages>
+      <module_usage name="ctypes" finding="excluded" line="5" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="time" finding="absolute" line="6" />
+      <module_usage name="comtypes.client" finding="not-found" line="8" />
+      <module_usage name="pytracemp" finding="absolute" line="10" />
+      <module_usage name="pytracemp.lprint" finding="not-found" line="10" />
+      <module_usage name="comtypes" finding="not-found" line="36" />
+      <module_usage name="comtypes.gen" finding="not-found" line="44" />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.account_favorites_widget" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\account_favorites_widget.py">
+    <optimization-time pass="1" time="0.1562" micro_passes="5" max_branch_merge="43" merged_total="5186" />
+    <optimization-time pass="2" time="0.0312" micro_passes="1" max_branch_merge="42" merged_total="1004" />
+    <code-generation-time time="0.2969" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="6" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="json" finding="excluded" line="8" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="9" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="10" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="11" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="PySide6" finding="absolute" line="13" />
+      <module_usage name="PySide6.QtCore" finding="excluded" line="13" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtGui" finding="excluded" line="13" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtWidgets" finding="excluded" line="13" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="pytracemp" finding="absolute" line="15" />
+      <module_usage name="pytracemp.lprint" finding="not-found" line="15" />
+      <module_usage name="l_notepad_client" finding="absolute" line="17" />
+      <module_usage name="l_notepad_client.clipboard_recorder" finding="relative" line="17" />
+      <module_usage name="l_notepad_client" finding="absolute" line="18" />
+      <module_usage name="l_notepad_client.fav_vars" finding="relative" line="18" />
+      <module_usage name="l_notepad_client.folder_favorites_widget" finding="relative" line="19" />
+      <module_usage name="ctypes" finding="excluded" line="58" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="59" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="63" />
+      <module_usage name="ctypes" finding="excluded" line="85" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="86" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="90" />
+      <module_usage name="l_notepad_client.paths" finding="relative" line="419" />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.api_client" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\api_client.py">
+    <optimization-time pass="1" time="0.2344" micro_passes="5" max_branch_merge="31" merged_total="1119" />
+    <optimization-time pass="2" time="0.0000" micro_passes="1" max_branch_merge="11" merged_total="203" />
+    <code-generation-time time="0.0312" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="3" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="json" finding="excluded" line="5" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="urllib.error" finding="absolute" line="6" />
+      <module_usage name="urllib.parse" finding="absolute" line="7" />
+      <module_usage name="urllib.request" finding="absolute" line="8" />
+      <module_usage name="dataclasses" finding="excluded" line="9" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="10" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.clipboard_recorder" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\clipboard_recorder.py">
+    <optimization-time pass="1" time="0.1250" micro_passes="5" max_branch_merge="37" merged_total="3899" />
+    <optimization-time pass="2" time="0.0156" micro_passes="1" max_branch_merge="23" merged_total="756" />
+    <code-generation-time time="0.0469" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="13" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes" finding="excluded" line="15" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="hashlib" finding="excluded" line="17" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="18" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="struct" finding="excluded" line="19" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="sys" finding="absolute" line="20" />
+      <module_usage name="threading" finding="excluded" line="21" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="time" finding="absolute" line="22" />
+      <module_usage name="typing" finding="excluded" line="23" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="PySide6" finding="absolute" line="25" />
+      <module_usage name="PySide6.QtCore" finding="excluded" line="25" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtGui" finding="excluded" line="25" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtWidgets" finding="excluded" line="25" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="l_notepad_client.clipboard_store" finding="relative" line="27" />
+      <module_usage name="pytracemp" finding="absolute" line="32" />
+      <module_usage name="pytracemp.lprint" finding="not-found" line="32" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="16" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="343" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="345" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="346" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="355" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="356" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="357" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="358" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="359" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="360" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="364" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="367" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="373" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="374" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="379" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="380" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="384" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="385" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="388" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="389" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="396" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="397" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="403" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="412" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="414" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="417" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="418" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="419" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="421" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="422" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="424" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="426" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="428" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="496" />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.clipboard_store" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\clipboard_store.py">
+    <optimization-time pass="1" time="0.0781" micro_passes="5" max_branch_merge="39" merged_total="3745" />
+    <optimization-time pass="2" time="0.0156" micro_passes="1" max_branch_merge="38" merged_total="722" />
+    <code-generation-time time="0.0625" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="11" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="json" finding="excluded" line="13" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="14" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="queue" finding="excluded" line="15" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="threading" finding="excluded" line="16" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="time" finding="absolute" line="17" />
+      <module_usage name="datetime" finding="excluded" line="18" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="19" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="20" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="PySide6" finding="absolute" line="22" />
+      <module_usage name="PySide6.QtCore" finding="excluded" line="22" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtGui" finding="excluded" line="22" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="l_notepad_client" finding="absolute" line="24" />
+      <module_usage name="l_notepad_client.paths" finding="relative" line="24" />
+      <module_usage name="pytracemp" finding="absolute" line="25" />
+      <module_usage name="pytracemp.lprint" finding="not-found" line="25" />
+      <module_usage name="ntpath" finding="excluded" line="587" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.cloud_sync" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\cloud_sync.py">
+    <optimization-time pass="1" time="0.1094" micro_passes="5" max_branch_merge="16" merged_total="2332" />
+    <optimization-time pass="2" time="0.0156" micro_passes="1" max_branch_merge="14" merged_total="444" />
+    <code-generation-time time="0.0312" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="20" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="atexit" finding="absolute" line="22" />
+      <module_usage name="copy" finding="excluded" line="23" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="json" finding="excluded" line="24" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="25" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="queue" finding="excluded" line="26" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="threading" finding="excluded" line="27" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="time" finding="absolute" line="28" />
+      <module_usage name="urllib.error" finding="absolute" line="29" />
+      <module_usage name="urllib.parse" finding="absolute" line="30" />
+      <module_usage name="urllib.request" finding="absolute" line="31" />
+      <module_usage name="pathlib" finding="excluded" line="32" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="33" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="urllib.parse" finding="absolute" line="34" />
+      <module_usage name="pytracemp" finding="absolute" line="37" />
+      <module_usage name="pytracemp.lprint" finding="not-found" line="37" />
+      <module_usage name="builtins" finding="absolute" line="40" />
+      <module_usage name="l_notepad_client" finding="absolute" line="45" />
+      <module_usage name="l_notepad_client.db" finding="relative" line="45" />
+      <module_usage name="l_notepad_client" finding="absolute" line="46" />
+      <module_usage name="l_notepad_client.file_store" finding="relative" line="46" />
+      <module_usage name="l_notepad_client.note_access" finding="relative" line="46" />
+      <module_usage name="l_notepad_client.paths" finding="relative" line="46" />
+      <module_usage name="yaml" finding="not-found" line="136" />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.db" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\db.py">
+    <optimization-time pass="1" time="0.0156" micro_passes="4" max_branch_merge="7" merged_total="133" />
+    <optimization-time pass="2" time="0.0156" micro_passes="1" max_branch_merge="6" merged_total="32" />
+    <code-generation-time time="0.0000" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="2" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="4" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="sqlite3" finding="excluded" line="5" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="contextlib" finding="excluded" line="6" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="datetime" finding="excluded" line="7" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="8" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="9" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="l_notepad_client" finding="absolute" line="11" />
+      <module_usage name="l_notepad_client.paths" finding="relative" line="11" />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.fav_vars" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\fav_vars.py">
+    <optimization-time pass="1" time="0.0469" micro_passes="4" max_branch_merge="7" merged_total="262" />
+    <optimization-time pass="2" time="0.0000" micro_passes="1" max_branch_merge="6" merged_total="55" />
+    <code-generation-time time="0.0156" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="36" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="functools" finding="excluded" line="38" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="getpass" finding="excluded" line="39" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="40" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="platform" finding="excluded" line="41" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="re" finding="excluded" line="42" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="datetime" finding="excluded" line="43" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ntpath" finding="excluded" line="102" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.file_store" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\file_store.py">
+    <optimization-time pass="1" time="0.0469" micro_passes="4" max_branch_merge="18" merged_total="1727" />
+    <optimization-time pass="2" time="0.0156" micro_passes="1" max_branch_merge="18" merged_total="419" />
+    <code-generation-time time="0.0469" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="2" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="4" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="re" finding="excluded" line="5" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="time" finding="absolute" line="6" />
+      <module_usage name="dataclasses" finding="excluded" line="7" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="datetime" finding="excluded" line="8" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="9" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="10" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="l_notepad_client" finding="absolute" line="12" />
+      <module_usage name="l_notepad_client.paths" finding="relative" line="12" />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.folder_favorites_hotkey" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\folder_favorites_hotkey.py">
+    <optimization-time pass="1" time="0.0625" micro_passes="5" max_branch_merge="25" merged_total="1927" />
+    <optimization-time pass="2" time="0.0000" micro_passes="1" max_branch_merge="24" merged_total="365" />
+    <code-generation-time time="0.0312" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="4" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes" finding="excluded" line="6" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="json" finding="excluded" line="8" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="logging" finding="excluded" line="9" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="sys" finding="absolute" line="10" />
+      <module_usage name="threading" finding="excluded" line="11" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="time" finding="absolute" line="12" />
+      <module_usage name="pathlib" finding="excluded" line="13" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="14" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="PySide6" finding="absolute" line="16" />
+      <module_usage name="PySide6.QtCore" finding="excluded" line="16" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="l_notepad_client" finding="absolute" line="18" />
+      <module_usage name="l_notepad_client.paths" finding="relative" line="18" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="7" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="99" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="104" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="105" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="107" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="109" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="111" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="112" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="115" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="116" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="117" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="118" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="121" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="123" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="124" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="125" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="127" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="129" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="131" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="132" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="133" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="135" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="138" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="139" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="140" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="141" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="418" />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.folder_favorites_widget" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\folder_favorites_widget.py">
+    <optimization-time pass="1" time="0.5938" micro_passes="5" max_branch_merge="91" merged_total="14428" />
+    <optimization-time pass="2" time="0.0625" micro_passes="1" max_branch_merge="90" merged_total="2811" />
+    <code-generation-time time="0.2500" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="6" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="hashlib" finding="excluded" line="8" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="json" finding="excluded" line="9" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="10" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="re" finding="excluded" line="11" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="subprocess" finding="excluded" line="12" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="sys" finding="absolute" line="13" />
+      <module_usage name="ctypes" finding="excluded" line="14" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="threading" finding="excluded" line="16" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="time" finding="absolute" line="17" />
+      <module_usage name="urllib.parse" finding="absolute" line="18" />
+      <module_usage name="urllib.request" finding="absolute" line="19" />
+      <module_usage name="datetime" finding="excluded" line="20" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="21" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="22" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="PySide6" finding="absolute" line="24" />
+      <module_usage name="PySide6.QtCore" finding="excluded" line="24" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtGui" finding="excluded" line="24" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtWidgets" finding="excluded" line="24" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.Shiboken" finding="not-found" line="24" />
+      <module_usage name="l_notepad_client" finding="absolute" line="26" />
+      <module_usage name="l_notepad_client.paths" finding="relative" line="26" />
+      <module_usage name="l_notepad_client" finding="absolute" line="27" />
+      <module_usage name="l_notepad_client.fav_vars" finding="relative" line="27" />
+      <module_usage name="l_notepad_client" finding="absolute" line="28" />
+      <module_usage name="l_notepad_client.clipboard_recorder" finding="relative" line="28" />
+      <module_usage name="l_notepad_client" finding="absolute" line="29" />
+      <module_usage name="l_notepad_client.clipboard_store" finding="relative" line="29" />
+      <module_usage name="l_notepad_client.clipboard_store" finding="relative" line="30" />
+      <module_usage name="pytracemp" finding="absolute" line="31" />
+      <module_usage name="pytracemp.lprint" finding="not-found" line="31" />
+      <module_usage name="ntpath" finding="excluded" line="415" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ntpath" finding="excluded" line="430" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="1276" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="1278" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="1288" />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="1290" />
+      <module_usage name="PySide6" finding="absolute" line="1766" />
+      <module_usage name="PySide6.QtSvg" finding="excluded" line="1766" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="ctypes" finding="excluded" line="2053" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="2054" />
+      <module_usage name="pythoncom" finding="absolute" line="2083" />
+      <module_usage name="win32com.client" finding="absolute" line="2084" />
+      <module_usage name="pythoncom" finding="absolute" line="2932" />
+      <module_usage name="win32com.client" finding="absolute" line="2933" />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.history_store" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\history_store.py">
+    <optimization-time pass="1" time="0.0156" micro_passes="4" max_branch_merge="6" merged_total="400" />
+    <optimization-time pass="2" time="0.0156" micro_passes="1" max_branch_merge="6" merged_total="99" />
+    <code-generation-time time="0.0156" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="10" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="sqlite3" finding="excluded" line="12" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="threading" finding="excluded" line="13" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="datetime" finding="excluded" line="14" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="15" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="16" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="l_notepad_client" finding="absolute" line="18" />
+      <module_usage name="l_notepad_client.paths" finding="relative" line="18" />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.knowledge" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\knowledge.py">
+    <optimization-time pass="1" time="0.0156" micro_passes="4" max_branch_merge="15" merged_total="707" />
+    <optimization-time pass="2" time="0.0000" micro_passes="1" max_branch_merge="15" merged_total="175" />
+    <code-generation-time time="0.0000" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="11" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="re" finding="excluded" line="13" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="sqlite3" finding="excluded" line="14" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="datetime" finding="excluded" line="15" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="16" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.local_main" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\local_main.py">
+    <optimization-time pass="1" time="0.2969" micro_passes="6" max_branch_merge="54" merged_total="8475" />
+    <optimization-time pass="2" time="0.0312" micro_passes="1" max_branch_merge="50" merged_total="1348" />
+    <code-generation-time time="0.1250" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="3" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="json" finding="excluded" line="5" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="logging" finding="excluded" line="6" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="7" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="re" finding="excluded" line="13" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="sys" finding="absolute" line="14" />
+      <module_usage name="threading" finding="excluded" line="15" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="time" finding="absolute" line="16" />
+      <module_usage name="urllib.error" finding="absolute" line="17" />
+      <module_usage name="urllib.request" finding="absolute" line="18" />
+      <module_usage name="zlib" finding="absolute" line="19" />
+      <module_usage name="dataclasses" finding="excluded" line="20" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="21" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="PySide6" finding="absolute" line="23" />
+      <module_usage name="PySide6.QtCore" finding="excluded" line="23" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtGui" finding="excluded" line="23" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtNetwork" finding="excluded" line="23" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtWidgets" finding="excluded" line="23" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="l_qframelesswindow" finding="absolute" line="24" />
+      <module_usage name="l_qframelesswindow.L_FramelessMainWindow" finding="relative" line="24" />
+      <module_usage name="l_qframelesswindow.LoginStore" finding="not-found" line="24" />
+      <module_usage name="l_notepad_client" finding="absolute" line="26" />
+      <module_usage name="l_notepad_client.clipboard_recorder" finding="relative" line="26" />
+      <module_usage name="l_notepad_client" finding="absolute" line="27" />
+      <module_usage name="l_notepad_client.clipboard_store" finding="relative" line="27" />
+      <module_usage name="l_notepad_client" finding="absolute" line="28" />
+      <module_usage name="l_notepad_client.file_store" finding="relative" line="28" />
+      <module_usage name="l_notepad_client" finding="absolute" line="29" />
+      <module_usage name="l_notepad_client.server_config" finding="relative" line="29" />
+      <module_usage name="l_notepad_client.api_client" finding="relative" line="30" />
+      <module_usage name="l_notepad_client.folder_favorites_hotkey" finding="relative" line="31" />
+      <module_usage name="l_notepad_client.paths" finding="relative" line="32" />
+      <module_usage name="pytracemp" finding="absolute" line="33" />
+      <module_usage name="pytracemp.lprint" finding="not-found" line="33" />
+      <module_usage name="l_notepad_client.settings_widget" finding="relative" line="34" />
+      <module_usage name="l_notepad_client.ui" finding="relative" line="35" />
+      <module_usage name="ctypes" finding="excluded" line="331" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="332" />
+      <module_usage name="ctypes" finding="excluded" line="459" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes" finding="excluded" line="533" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="713" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="json" finding="excluded" line="728" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="urllib.request" finding="absolute" line="729" />
+      <module_usage name="urllib.error" finding="absolute" line="730" />
+      <module_usage name="datetime" finding="excluded" line="742" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="json" finding="excluded" line="773" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="urllib.request" finding="absolute" line="774" />
+      <module_usage name="urllib.error" finding="absolute" line="775" />
+      <module_usage name="os" finding="excluded" line="787" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="json" finding="excluded" line="807" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="urllib.request" finding="absolute" line="808" />
+      <module_usage name="urllib.error" finding="absolute" line="809" />
+      <module_usage name="os" finding="excluded" line="826" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="urllib.request" finding="absolute" line="845" />
+      <module_usage name="urllib.error" finding="absolute" line="846" />
+      <module_usage name="os" finding="excluded" line="860" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ntpath" finding="excluded" line="892" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes" finding="excluded" line="1258" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="l_notepad_client.logger" finding="relative" line="1320" />
+      <module_usage name="ctypes" finding="excluded" line="1357" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="1358" />
+      <module_usage name="faulthandler" finding="absolute" line="1460" />
+      <module_usage name="traceback" finding="excluded" line="1469" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="l_qt_wgt_lib" finding="absolute" line="1527" />
+      <module_usage name="l_qt_wgt_lib.install_combobox_wheel_guard" finding="not-found" line="1527" />
+      <module_usage name="l_notepad_client.logger" finding="relative" line="1667" />
+      <module_usage name="ctypes" finding="excluded" line="1713" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes.wintypes" finding="absolute" line="1714" />
+      <module_usage name="ctypes" finding="excluded" line="1758" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.local_main_ori" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\local_main_ori.py">
+    <optimization-time pass="1" time="0.0156" micro_passes="3" />
+    <optimization-time pass="2" time="0.0000" micro_passes="1" />
+    <code-generation-time time="0.0000" />
+    <module_usages>
+      <module_usage name="l_notepad_client.local_main" finding="absolute" line="7" />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.logger" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\logger.py">
+    <optimization-time pass="1" time="0.0000" micro_passes="4" max_branch_merge="18" merged_total="378" />
+    <optimization-time pass="2" time="0.0000" micro_passes="1" max_branch_merge="18" merged_total="93" />
+    <code-generation-time time="0.0156" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="1" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="builtins" finding="absolute" line="3" />
+      <module_usage name="logging" finding="excluded" line="4" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="dataclasses" finding="excluded" line="5" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="6" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="7" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.migrate_sqlite_to_files" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\migrate_sqlite_to_files.py">
+    <optimization-time pass="1" time="0.0312" micro_passes="5" max_branch_merge="22" merged_total="325" />
+    <optimization-time pass="2" time="0.0156" micro_passes="1" max_branch_merge="18" merged_total="63" />
+    <code-generation-time time="0.0156" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="2" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="argparse" finding="excluded" line="4" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="json" finding="excluded" line="5" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="6" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="dataclasses" finding="excluded" line="7" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="datetime" finding="excluded" line="8" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="9" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="10" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="l_notepad_client" finding="absolute" line="12" />
+      <module_usage name="l_notepad_client.db" finding="relative" line="12" />
+      <module_usage name="l_notepad_client" finding="absolute" line="13" />
+      <module_usage name="l_notepad_client.file_store" finding="relative" line="13" />
+      <module_usage name="pytracemp" finding="absolute" line="14" />
+      <module_usage name="pytracemp.lprint" finding="not-found" line="14" />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.note_access" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\note_access.py">
+    <optimization-time pass="1" time="0.0469" micro_passes="4" max_branch_merge="14" merged_total="1180" />
+    <optimization-time pass="2" time="0.0000" micro_passes="1" max_branch_merge="11" merged_total="287" />
+    <code-generation-time time="0.0156" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="14" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="re" finding="excluded" line="16" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="sqlite3" finding="excluded" line="17" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="datetime" finding="excluded" line="18" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="19" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.paths" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\paths.py">
+    <optimization-time pass="1" time="0.0156" micro_passes="4" max_branch_merge="10" merged_total="456" />
+    <optimization-time pass="2" time="0.0000" micro_passes="1" max_branch_merge="9" merged_total="112" />
+    <code-generation-time time="0.0156" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="26" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="28" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="re" finding="excluded" line="29" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="shutil" finding="excluded" line="30" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="31" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ntpath" finding="excluded" line="155" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.server_config" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\server_config.py">
+    <optimization-time pass="1" time="0.0469" micro_passes="3" max_branch_merge="5" merged_total="89" />
+    <optimization-time pass="2" time="0.0000" micro_passes="1" max_branch_merge="5" merged_total="27" />
+    <code-generation-time time="0.0000" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="18" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="20" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="21" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="l_qframelesswindow.server_config" finding="absolute" line="23" />
+      <module_usage name="l_notepad_client" finding="absolute" line="25" />
+      <module_usage name="l_notepad_client.paths" finding="relative" line="25" />
+      <module_usage name="socket" finding="excluded" line="50" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.settings_widget" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\settings_widget.py">
+    <optimization-time pass="1" time="0.2344" micro_passes="4" max_branch_merge="56" merged_total="1447" />
+    <optimization-time pass="2" time="0.0156" micro_passes="1" max_branch_merge="56" merged_total="345" />
+    <code-generation-time time="0.0312" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="6" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="json" finding="excluded" line="8" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="9" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="10" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="PySide6" finding="absolute" line="12" />
+      <module_usage name="PySide6.QtCore" finding="excluded" line="12" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtWidgets" finding="excluded" line="12" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="pytracemp" finding="absolute" line="14" />
+      <module_usage name="pytracemp.lprint" finding="not-found" line="14" />
+      <module_usage name="l_notepad_client.paths" finding="relative" line="16" />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.ui" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\ui.py">
+    <optimization-time pass="1" time="1.4375" micro_passes="6" max_branch_merge="294" merged_total="38948" />
+    <optimization-time pass="2" time="0.1719" micro_passes="1" max_branch_merge="293" merged_total="6465" />
+    <code-generation-time time="0.4531" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="3" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="subprocess" finding="excluded" line="5" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="sys" finding="absolute" line="6" />
+      <module_usage name="json" finding="excluded" line="7" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="os" finding="excluded" line="8" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="re" finding="excluded" line="9" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes" finding="excluded" line="10" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="logging" finding="excluded" line="11" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="threading" finding="excluded" line="12" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="time" finding="absolute" line="13" />
+      <module_usage name="traceback" finding="excluded" line="14" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="urllib.error" finding="absolute" line="15" />
+      <module_usage name="urllib.request" finding="absolute" line="16" />
+      <module_usage name="uuid" finding="excluded" line="17" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="webbrowser" finding="excluded" line="18" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="dataclasses" finding="excluded" line="19" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="datetime" finding="excluded" line="20" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pathlib" finding="excluded" line="22" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="PySide6" finding="absolute" line="24" />
+      <module_usage name="PySide6.QtCore" finding="excluded" line="24" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtGui" finding="excluded" line="24" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtUiTools" finding="excluded" line="24" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtWidgets" finding="excluded" line="24" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="shiboken6" finding="absolute" line="26" />
+      <module_usage name="l_notepad_client.api_client" finding="relative" line="30" />
+      <module_usage name="l_notepad_client" finding="absolute" line="31" />
+      <module_usage name="l_notepad_client.clipboard_recorder" finding="relative" line="31" />
+      <module_usage name="l_notepad_client" finding="absolute" line="32" />
+      <module_usage name="l_notepad_client.history_store" finding="relative" line="32" />
+      <module_usage name="l_notepad_client" finding="absolute" line="33" />
+      <module_usage name="l_notepad_client.paths" finding="relative" line="33" />
+      <module_usage name="l_notepad_client" finding="absolute" line="34" />
+      <module_usage name="l_notepad_client.server_config" finding="relative" line="34" />
+      <module_usage name="l_notepad_client.folder_favorites_widget" finding="relative" line="35" />
+      <module_usage name="l_notepad_client.account_favorites_widget" finding="relative" line="36" />
+      <module_usage name="l_notepad_client.settings_widget" finding="relative" line="37" />
+      <module_usage name="l_notepad_client.version_diff_dialog" finding="relative" line="38" />
+      <module_usage name="l_notepad_client.file_store" finding="relative" line="39" />
+      <module_usage name="pytracemp" finding="absolute" line="40" />
+      <module_usage name="pytracemp.lprint" finding="not-found" line="40" />
+      <module_usage name="l_qt_wgt_lib.smart_widget" finding="absolute" line="43" />
+      <module_usage name="l_qt_wgt_lib.smart_widget.CodeEditorWidget" finding="not-found" line="43" />
+      <module_usage name="l_qt_wgt_lib.smart_widget.apply_indent_display_options" finding="not-found" line="43" />
+      <module_usage name="l_qt_wgt_lib.smart_widget.load_indent_display_options_from_settings" finding="not-found" line="43" />
+      <module_usage name="l_qt_wgt_lib.tray_window" finding="absolute" line="48" />
+      <module_usage name="gc" finding="absolute" line="1044" />
+      <module_usage name="threading" finding="excluded" line="3772" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="threading" finding="excluded" line="4126" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="shutil" finding="excluded" line="5766" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="ctypes" finding="excluded" line="5998" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="traceback" finding="excluded" line="6048" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+    </module_usages>
+  </module>
+  <module name="l_notepad_client.version_diff_dialog" kind="CompiledPythonModule" usage="root_module" reason="Root module" source_path="${cwd}\l_notepad_client\version_diff_dialog.py">
+    <optimization-time pass="1" time="0.4062" micro_passes="5" max_branch_merge="39" merged_total="7127" />
+    <optimization-time pass="2" time="0.0156" micro_passes="1" max_branch_merge="39" merged_total="1411" />
+    <code-generation-time time="0.0938" />
+    <module_usages>
+      <module_usage name="__future__" finding="excluded" line="14" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="difflib" finding="excluded" line="16" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="re" finding="excluded" line="17" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="dataclasses" finding="excluded" line="18" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="typing" finding="excluded" line="19" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="PySide6" finding="absolute" line="21" />
+      <module_usage name="PySide6.QtCore" finding="excluded" line="21" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtGui" finding="excluded" line="21" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="PySide6.QtWidgets" finding="excluded" line="21" exclusion_reason="Extension modules cannot be inspected." />
+      <module_usage name="l_qt_wgt_lib.smart_widget" finding="absolute" line="23" />
+      <module_usage name="l_qt_wgt_lib.smart_widget.CodeEditorWidget" finding="not-found" line="23" />
+      <module_usage name="l_qt_wgt_lib.smart_widget.code_editor" finding="absolute" line="26" />
+      <module_usage name="l_qt_wgt_lib.smart_widget.code_editor" finding="absolute" line="29" />
+      <module_usage name="l_qt_wgt_lib.smart_widget.code_editor" finding="absolute" line="32" />
+    </module_usages>
+  </module>
+  <performance>
+    <memory_usage name="after_launch" value="39874560" />
+    <memory_usage name="before_c_code_generation" value="89722880" />
+    <memory_usage name="before_running_scons" value="97034240" />
+  </performance>
+  <data_composer blob_size="359419" total="11254">
+    <module_data filename="__bytecode.const" blob_name=".bytecode" blob_size="3" input_size="0" />
+    <module_data filename="__constants.const" blob_name="" blob_size="910" input_size="2264" />
+    <module_data filename="module.l_notepad_client._dump_explorer_uia.const" blob_name="l_notepad_client._dump_explorer_uia" blob_size="2053" input_size="3683" />
+    <module_data filename="module.l_notepad_client.account_favorites_widget.const" blob_name="l_notepad_client.account_favorites_widget" blob_size="20643" input_size="35175" />
+    <module_data filename="module.l_notepad_client.api_client.const" blob_name="l_notepad_client.api_client" blob_size="5790" input_size="11428" />
+    <module_data filename="module.l_notepad_client.clipboard_recorder.const" blob_name="l_notepad_client.clipboard_recorder" blob_size="10672" input_size="20385" />
+    <module_data filename="module.l_notepad_client.clipboard_store.const" blob_name="l_notepad_client.clipboard_store" blob_size="12874" input_size="23814" />
+    <module_data filename="module.l_notepad_client.cloud_sync.const" blob_name="l_notepad_client.cloud_sync" blob_size="8660" input_size="15258" />
+    <module_data filename="module.l_notepad_client.const" blob_name="l_notepad_client" blob_size="427" input_size="1177" />
+    <module_data filename="module.l_notepad_client.db.const" blob_name="l_notepad_client.db" blob_size="5029" input_size="6784" />
+    <module_data filename="module.l_notepad_client.fav_vars.const" blob_name="l_notepad_client.fav_vars" blob_size="4001" input_size="7290" />
+    <module_data filename="module.l_notepad_client.file_store.const" blob_name="l_notepad_client.file_store" blob_size="6640" input_size="12132" />
+    <module_data filename="module.l_notepad_client.folder_favorites_hotkey.const" blob_name="l_notepad_client.folder_favorites_hotkey" blob_size="8867" input_size="16216" />
+    <module_data filename="module.l_notepad_client.folder_favorites_widget.const" blob_name="l_notepad_client.folder_favorites_widget" blob_size="63916" input_size="108195" />
+    <module_data filename="module.l_notepad_client.history_store.const" blob_name="l_notepad_client.history_store" blob_size="3017" input_size="4992" />
+    <module_data filename="module.l_notepad_client.knowledge.const" blob_name="l_notepad_client.knowledge" blob_size="7378" input_size="10802" />
+    <module_data filename="module.l_notepad_client.local_main.const" blob_name="l_notepad_client.local_main" blob_size="31643" input_size="54974" />
+    <module_data filename="module.l_notepad_client.local_main_ori.const" blob_name="l_notepad_client.local_main_ori" blob_size="393" input_size="1055" />
+    <module_data filename="module.l_notepad_client.logger.const" blob_name="l_notepad_client.logger" blob_size="1465" input_size="3473" />
+    <module_data filename="module.l_notepad_client.migrate_sqlite_to_files.const" blob_name="l_notepad_client.migrate_sqlite_to_files" blob_size="1764" input_size="3701" />
+    <module_data filename="module.l_notepad_client.note_access.const" blob_name="l_notepad_client.note_access" blob_size="10150" input_size="14864" />
+    <module_data filename="module.l_notepad_client.paths.const" blob_name="l_notepad_client.paths" blob_size="3803" input_size="6297" />
+    <module_data filename="module.l_notepad_client.server_config.const" blob_name="l_notepad_client.server_config" blob_size="3164" input_size="5278" />
+    <module_data filename="module.l_notepad_client.settings_widget.const" blob_name="l_notepad_client.settings_widget" blob_size="9689" input_size="17653" />
+    <module_data filename="module.l_notepad_client.ui.const" blob_name="l_notepad_client.ui" blob_size="105413" input_size="173376" />
+    <module_data filename="module.l_notepad_client.version_diff_dialog.const" blob_name="l_notepad_client.version_diff_dialog" blob_size="30208" input_size="46285" />
+  </data_composer>
+  <performance-totals>
+    <optimization-time pass="1" time="4.0625" module_count="24" />
+    <optimization-time pass="2" time="0.4375" module_count="24" />
+    <optimization-time pass="all" time="4.5000" module_count="24" />
+    <code-generation-time time="1.6250" module_count="24" />
+  </performance-totals>
+  <python_binary filename="D:\Temp\Log\lb_nolto\l_notepad_client\999.0\src\l_notepad_client.cp312-win_amd64.pyd" backend_resource_mode="coff_obj" reproducible="no" />
+  <command_line>
+    <option value="--assume-yes-for-downloads" />
+    <option value="--remove-output" />
+    <option value="--lto=no" />
+    <option value="--module" />
+    <option value="--mingw64" />
+    <option value="--include-package=l_notepad_client" />
+    <option value="--output-dir=D:\Temp\Log\lb_nolto\l_notepad_client\999.0\src" />
+    <option value="l_notepad_client" />
+  </command_line>
+  <plugins>
+    <plugin name="anti-bloat" user_enabled="no" />
+    <plugin name="gi" user_enabled="no" />
+    <plugin name="implicit-imports" user_enabled="no" />
+    <plugin name="options-nanny" user_enabled="no" />
+    <plugin name="pkg-resources" user_enabled="no" />
+    <plugin name="transformers" user_enabled="no" />
+  </plugins>
+  <distributions />
+  <python python_exe="${sys.real_prefix}\python.exe" python_flavor="Unknown" python_version="3.12.10" os_name="Windows" os_release="11" arch_name="x86_64" filesystem_encoding="utf-8">
+    <search_path>
+      <path value="${cwd}" />
+      <path value="${cwd}" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-source\l_qframelesswindow\999.0\src" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-source\l_script_editor\999.0\src" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-source\l_qt_wgt_lib\999.0\src" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-source\l_thread_safe\999.0\src" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-source\l_agent_tool\999.0\src" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-source\pytracemp\999.0\src" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-source\l_builder\999.0\src" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\wuwo\packages\rez_pip_installer\1.0.0\src" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\wuwo\packages\l_app_ready\1.0.0\src" />
+      <path value="${sys.real_prefix}\Lib\site-packages" />
+      <path value="${sys.real_prefix}\Lib" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\idna\3.19\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\typing_extensions\4.16.0\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\anyio\4.15.1\python-3.12\typing_extensions-4.16.0+\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\psutil\7.2.2\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\watchdog\6.0.0\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\watchfiles\1.2.0\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\nuitka\4.2.1\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\termcolor\3.3.0\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\fire\0.7.1\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-source\l_simple_gui\999.0\src" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\pyperclip\1.11.0\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\pywin32\312\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\pywin32\312\platform-windows\arch-AMD64\python-3.12\python\win32" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\pywin32\312\platform-windows\arch-AMD64\python-3.12\python\win32\lib" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\pywin32\312\platform-windows\arch-AMD64\python-3.12\python\pywin32_system32" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\winshell\0.6\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-source\Lugwit_Module\999.0\src" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\smmap\5.0.3\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\gitdb\4.0.12\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\gitpython\3.1.59\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\shiboken6\6.11.0\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\pyside6_essentials\6.11.0\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\pyside6_addons\6.11.0\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\pyside6\6.11.0\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\mistune\3.3.4\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\packaging\26.3\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\pygments\2.21.0\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="d:\TD_Depot\Software\lugwit_syncplug\lugwit_insapp\trayapp\rez-package-3rd\qtpy\2.4.3\platform-windows\arch-AMD64\python-3.12\python" />
+      <path value="${sys.real_prefix}\DLLs" />
+      <path value="${sys.real_prefix}" />
+    </search_path>
+  </python>
+  <output run_filename="D:\Temp\Log\lb_nolto\l_notepad_client\999.0\src\l_notepad_client.cp312-win_amd64.pyd" />
+</nuitka-compilation-report>
