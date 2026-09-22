@@ -14,6 +14,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from pytracemp import lprint
 
+# DPAPI 统一走 l_qframelesswindow 的唯一实现（避免多份 DATA_BLOB 抢 crypt32 全局 argtypes）
+from l_qframelesswindow.dpapi import (
+    dpapi_available as _dpapi_available,
+    protect as _dpapi_protect,
+    unprotect as _dpapi_unprotect,
+)
+
 from . import clipboard_recorder
 from . import fav_vars
 from .folder_favorites_widget import (
@@ -51,57 +58,19 @@ class AccountItem(TypedDict, total=False):
 
 
 def _dpapi_encrypt(data: bytes) -> bytes:
-    """Windows DPAPI 加密（CryptProtectData），用于本地离线账号缓存，避免明文密码。"""
-    if os.name != "nt":
+    """本地离线账号缓存加密（Windows DPAPI；非 Windows 退化为 base64）。"""
+    if not _dpapi_available():
         import base64
         return base64.b64encode(data)
-    import ctypes
-    import ctypes.wintypes
-
-    class DATA_BLOB(ctypes.Structure):
-        _fields_ = [
-            ("cbData", ctypes.wintypes.DWORD),
-            ("pbData", ctypes.POINTER(ctypes.c_char)),
-        ]
-
-    buf = ctypes.create_string_buffer(data, len(data))
-    blob_in = DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
-    blob_out = DATA_BLOB()
-    if not ctypes.windll.crypt32.CryptProtectData(
-        ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
-    ):
-        raise OSError("CryptProtectData failed")
-    try:
-        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
-    finally:
-        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+    return _dpapi_protect(data)
 
 
 def _dpapi_decrypt(data: bytes) -> bytes:
-    """Windows DPAPI 解密（CryptUnprotectData），与 _dpapi_encrypt 对应。"""
-    if os.name != "nt":
+    """本地离线账号缓存解密，与 _dpapi_encrypt 对应。"""
+    if not _dpapi_available():
         import base64
         return base64.b64decode(data)
-    import ctypes
-    import ctypes.wintypes
-
-    class DATA_BLOB(ctypes.Structure):
-        _fields_ = [
-            ("cbData", ctypes.wintypes.DWORD),
-            ("pbData", ctypes.POINTER(ctypes.c_char)),
-        ]
-
-    buf = ctypes.create_string_buffer(data, len(data))
-    blob_in = DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
-    blob_out = DATA_BLOB()
-    if not ctypes.windll.crypt32.CryptUnprotectData(
-        ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
-    ):
-        raise OSError("CryptUnprotectData failed")
-    try:
-        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
-    finally:
-        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+    return _dpapi_unprotect(data)
 
 
 class CustomFieldManageDialog(QtWidgets.QDialog):
@@ -711,9 +680,15 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
             self._accounts = []
 
     def _save_favorites(self) -> None:
-        """保存账号列表到本地加密文件（DPAPI 加密，避免明文密码落盘）。"""
+        """保存「本地项」到本地加密文件。
+
+        只落**本地项**（未上云、无服务端 id）：云项是服务器数据，登录时从服务端取、
+        登出时本就隐藏，本地不再重复存一份密文——避免同一秘密在服务端与客户端被
+        两套加密体系各保护一遍，也减少本地明文密码的暴露面。
+        """
+        local_only = [a for a in self._accounts if not a.get("cloud") and not a.get("id")]
         try:
-            raw = json.dumps(self._accounts, ensure_ascii=False).encode("utf-8")
+            raw = json.dumps(local_only, ensure_ascii=False).encode("utf-8")
             self._favorites_file.write_bytes(_dpapi_encrypt(raw))
         except Exception as e:
             lprint(f"保存本地账号收藏失败: {e}")
@@ -723,7 +698,7 @@ class AccountFavoritesWidget(QtWidgets.QWidget):
         return self._favorites_file
 
     def _save_offline_cache(self) -> None:
-        """在线加载成功后，把账号列表加密备份到本地，供离线查看。"""
+        """把本地项加密备份到本地（云项不入本地缓存，见 `_save_favorites`）。"""
         self._save_favorites()
 
     def _load_offline_cache(self) -> bool:
