@@ -1434,6 +1434,8 @@ def _foreground_is_remote_client() -> bool:
 
 # 崩溃日志路径（由 _install_crash_handlers 设置，Qt fatal 也写这里）
 _CRASH_LOG_PATH: Path | None = None
+# faulthandler 的目标文件句柄：必须保留引用，否则可能被 GC 关闭导致原生崩溃时写不出栈
+_FAULTHANDLER_FILE = None
 
 
 def _install_crash_handlers() -> None:
@@ -1458,7 +1460,10 @@ def _install_crash_handlers() -> None:
             )
         try:
             import faulthandler
-            faulthandler.enable(_CRASH_LOG_PATH.open("a", encoding="utf-8"))
+
+            global _FAULTHANDLER_FILE
+            _FAULTHANDLER_FILE = _CRASH_LOG_PATH.open("a", encoding="utf-8")
+            faulthandler.enable(_FAULTHANDLER_FILE)
         except Exception:
             pass
     except Exception:

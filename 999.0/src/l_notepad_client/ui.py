@@ -74,7 +74,7 @@ ZHIPU_MODELS = [
     "glm-4-plus",
     "glm-4-long",
 ]
-DEFAULT_ZHIPU_KEY = "263c58d09135c4f088b0d436e3b89bfb.hXFGig2ucu4xe5PT"
+DEFAULT_ZHIPU_KEY = "64c6d564cff24c1ca003d4c732c5a4a5.88NypUHop5mbnlXY"
 ZHIPU_API_KEY = os.environ.get("ZHIPU_API_KEY", DEFAULT_ZHIPU_KEY)
 
 DEFAULT_MODEL_PRESETS = SILICONFLOW_MODELS
@@ -2744,7 +2744,18 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         if isinstance(item_id, str) and item_id.startswith(SEARCH_HIT_PREFIX):
             # 检索命中行（知识库/未映射笔记）：选中不加载笔记，双击时再浏览器打开
             return
-        note_id = int(item_id)
+        if isinstance(item_id, str) and (
+            item_id.startswith("__folder__:") or item_id.startswith("__empty__")
+        ):
+            # 文件夹分组行/空占位行：不是笔记，直接忽略
+            return
+        if isinstance(item_id, str) and not item_id.isdigit():
+            # 其它非数字 id（未识别的特殊行）：不做 int 解析，避免 ValueError
+            return
+        try:
+            note_id = int(item_id)
+        except (TypeError, ValueError):
+            return
         try:
             note = self.api.get_note(note_id)
         except ApiError as e:
@@ -6213,8 +6224,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self._folder_hover_popup_list = listw
         return popup, title, listw
 
-    @staticmethod
-    def _collect_folder_entries(item) -> list[tuple[str, str, tuple]]:
+    def _collect_folder_entries(self, item) -> list[tuple[str, str, tuple]]:
         """展平收集文件夹内的条目：[(显示名, 相对路径提示, 打开 key)]。
 
         key 形如 ("note", id) / ("external", path) / ("ipc", path)。

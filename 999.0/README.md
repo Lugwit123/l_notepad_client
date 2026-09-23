@@ -5,7 +5,7 @@
 | 项 | 内容 |
 | --- | --- |
 | 包 | `l_notepad_client 999.0` — L Notepad PySide6 desktop client: local/offline notes + HTTP to l_notepad_server |
-| 依赖 | `python-3.12.10`<br>`pyside6`<br>`l_qframelesswindow`<br>`l_qt_wgt_lib`<br>`pytracemp` |
+| 依赖 | `python-3.12.10`<br>`pyside6_essentials`<br>`l_qframelesswindow`<br>`l_qt_wgt_lib`<br>`pytracemp` |
 | 提供 | PYTHONPATH {root}/src<br>env L_NOTEPAD_ROOT<br>PYTHONIOENCODING=utf-8 |
 | 入口 | `l_notepad_client`<br>`l_notepad_ori` |
 | 用法 | `wuwo l_notepad_client` 进入该包环境<br>`wuwor l_notepad_client -- l_notepad_client` 直接调用别名 |
