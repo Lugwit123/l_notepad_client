@@ -15,9 +15,10 @@ import os
 import queue
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from PySide6 import QtCore, QtGui
 
@@ -97,6 +98,99 @@ def cleanup_stale_temp_files() -> int:
     return removed
 
 
+def history_lock_path() -> Path:
+    """跨进程写盘互斥锁文件（与历史文件同目录）。"""
+    p = history_file()
+    return p.with_name(p.name + ".lock")
+
+
+def _file_sig(path: Path) -> tuple | None:
+    """文件身份指纹 (mtime_ns, size)；不存在返回 None。"""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+@contextmanager
+def _cross_process_lock(timeout: float = 5.0) -> Iterator[bool]:
+    """拿一把跨进程写盘锁（Windows: ``msvcrt`` 对锁文件加字节锁）。
+
+    把"重读磁盘 → 合并 → 原子替换"变成原子操作，避免两个实例读到半截再互相覆盖。
+    拿不到锁（超时 / 非 Windows）也照常放行并返回 False：此时退化成"尽力而为"，
+    调用方仍会重读磁盘合并，只是不再有原子性——不能因此把历史写不出去。
+    """
+    fd = -1
+    path = history_lock_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_CREAT | os.O_RDWR)
+    except OSError:
+        yield False
+        return
+    locked = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            deadline = time.monotonic() + max(0.0, timeout)
+            while True:
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    locked = True
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.05)
+        yield locked
+    finally:
+        if locked:
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            except Exception:
+                pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def merge_items(disk_items: list[dict], mem_items: list[dict],
+                deleted: frozenset | set = frozenset(),
+                max_stored: int = CLIPBOARD_MAX_STORED) -> list[dict]:
+    """合并"磁盘上已有的历史"与"本进程内存里的历史"。
+
+    - 内存条目**原样保留**：旧历史文件里可能存在同 key 的重复条目（加载刻意不去重），
+      这里不能替它去重
+    - 只把"内存里没有的 key"从磁盘补进来（磁盘是另一个实例写的），跳过本次已删除的键
+    - 结果按「收藏在前、组内时间倒序」规范排序，并按 ``max_stored`` 只裁最旧的未收藏项
+
+    多实例并存时谁先退出都不会把对方的数据覆盖掉。
+    """
+    merged = list(mem_items)
+    seen = {dedupe_key(it) for it in merged}
+    for it in disk_items:
+        key = dedupe_key(it)
+        if key in seen or key in deleted:
+            continue
+        seen.add(key)
+        merged.append(it)
+    merged.sort(
+        key=lambda it: (bool(it.get("favorite")), str(it.get("time", ""))),
+        reverse=True,
+    )
+    # 裁剪口径与 _trim 一致：只丢最旧的未收藏项，收藏项无条件保留
+    i = len(merged) - 1
+    while len(merged) > max_stored and i >= 0:
+        if not merged[i].get("favorite"):
+            merged.pop(i)
+        i -= 1
+    return merged
+
+
 class ClipboardHistoryModel(QtCore.QAbstractListModel):
     """剪贴板历史数据模型（配合 QListView 虚拟化渲染）。
 
@@ -116,6 +210,7 @@ class ClipboardHistoryModel(QtCore.QAbstractListModel):
     TimeRole = QtCore.Qt.UserRole + 4        # 记录时间
     SearchRole = QtCore.Qt.UserRole + 5      # 搜索过滤用的文本
     ItemRole = QtCore.Qt.UserRole + 6        # 整条 dict（右键/双击用）
+    FavoriteRole = QtCore.Qt.UserRole + 7    # 是否收藏（★ 置顶显示且免于清理）
 
     def __init__(self, items: list[dict] | None = None, parent=None) -> None:
         super().__init__(parent)
@@ -190,6 +285,8 @@ class ClipboardHistoryModel(QtCore.QAbstractListModel):
             return text
         if role == self.ItemRole:
             return item
+        if role == self.FavoriteRole:
+            return bool(item.get("favorite"))
         return None
 
     # ---- 业务接口 ----
@@ -207,32 +304,46 @@ class ClipboardHistoryModel(QtCore.QAbstractListModel):
         self.dataChanged.emit(
             self.index(row, 0), self.index(row, 0),
             [QtCore.Qt.DisplayRole, self.TextRole, self.SearchRole,
-             QtCore.Qt.ToolTipRole],
+             QtCore.Qt.ToolTipRole, self.FavoriteRole],
         )
 
-    def upsert_top(self, item: dict, max_stored: int = CLIPBOARD_MAX_STORED) -> bool:
-        """把条目放到最前：不存在则插入；已存在则移到最前并刷新内容/时间。
+    def _group_top_row(self, favorite: bool) -> int:
+        """收藏组恒在最前，非收藏组紧随其后；返回该组最前一行的行号。"""
+        return 0 if favorite else self.favorite_count()
 
-        返回 True 表示新增一行；False 表示既有行被置顶覆盖。
+    def _move_to_group_top(self, row: int) -> int:
+        """把该行移到所属分组（收藏 / 非收藏）的最前，返回移动后的行号。"""
+        item = self._items[row]
+        target = self._group_top_row(bool(item.get("favorite")))
+        if row == target:
+            return row
+        self.beginMoveRows(QtCore.QModelIndex(), row, row,
+                           QtCore.QModelIndex(), target)
+        self._items.pop(row)
+        self._items.insert(target, item)
+        self.endMoveRows()
+        return target
+
+    def upsert_top(self, item: dict, max_stored: int = CLIPBOARD_MAX_STORED) -> bool:
+        """把条目放到所属分组（收藏 / 非收藏）的最前。
+
+        不存在则插入；已存在则刷新内容/时间并置顶。已存在条目保留其收藏标记
+        （重新复制同内容不应丢失收藏）。返回 True 表示新增一行。
         """
         key = dedupe_key(item)
         row = self.row_of_key(key)
         if row is None:
-            self.beginInsertRows(QtCore.QModelIndex(), 0, 0)
-            self._items.insert(0, item)
+            target = self._group_top_row(bool(item.get("favorite")))
+            self.beginInsertRows(QtCore.QModelIndex(), target, target)
+            self._items.insert(target, item)
             self._key_set.add(key)
             self.endInsertRows()
             self._trim(max_stored)
             return True
-        if row == 0:
-            self._items[0] = item
-            self._emit_row_changed(0)
-            return False
-        self.beginMoveRows(QtCore.QModelIndex(), row, row, QtCore.QModelIndex(), 0)
-        self._items.pop(row)
-        self._items.insert(0, item)
-        self.endMoveRows()
-        self._emit_row_changed(0)
+        merged = dict(item)
+        merged["favorite"] = bool(self._items[row].get("favorite"))
+        self._items[row] = merged
+        self._emit_row_changed(self._move_to_group_top(row))
         return False
 
     def prepend(self, item: dict, max_stored: int = CLIPBOARD_MAX_STORED) -> None:
@@ -241,14 +352,40 @@ class ClipboardHistoryModel(QtCore.QAbstractListModel):
             return
 
     def _trim(self, max_stored: int) -> None:
-        if len(self._items) <= max_stored:
+        """裁剪到上限：只丢最旧的「非收藏」条目，收藏项永不因超限被丢。"""
+        excess = len(self._items) - max_stored
+        if excess <= 0:
             return
-        start, end = max_stored, len(self._items) - 1
-        self.beginRemoveRows(QtCore.QModelIndex(), start, end)
-        for dropped in self._items[max_stored:]:
+        drop_rows: list[int] = []
+        for i in range(len(self._items) - 1, -1, -1):
+            if excess <= 0:
+                break
+            if not self._items[i].get("favorite"):
+                drop_rows.append(i)
+                excess -= 1
+        # drop_rows 由末尾往前扫描得来，已是降序：从后往前删，前面的行号不失效
+        for row in drop_rows:
+            self.beginRemoveRows(QtCore.QModelIndex(), row, row)
+            dropped = self._items.pop(row)
             self._key_set.discard(dedupe_key(dropped))
-        del self._items[max_stored:]
-        self.endRemoveRows()
+            self.endRemoveRows()
+
+    def set_favorite(self, key: tuple, favorite: bool) -> bool:
+        """设置指定条目的收藏标记，并置顶到所属分组。返回 True 表示有变化。"""
+        row = self.row_of_key(key)
+        if row is None:
+            return False
+        if bool(self._items[row].get("favorite")) == bool(favorite):
+            return False
+        item = dict(self._items[row])
+        item["favorite"] = bool(favorite)
+        self._items[row] = item
+        self._emit_row_changed(self._move_to_group_top(row))
+        return True
+
+    def favorite_count(self) -> int:
+        """当前收藏条目数。"""
+        return sum(1 for it in self._items if it.get("favorite"))
 
     def remove_key(self, key: tuple) -> Optional[dict]:
         """删除指定 key 的条目，返回被删除的条目（无则 None）。"""
@@ -263,12 +400,24 @@ class ClipboardHistoryModel(QtCore.QAbstractListModel):
 
     def reset_items(self, items: list[dict]) -> None:
         self.beginResetModel()
-        self._items = list(items)
+        # 收藏组恒在最前；组内保持传入顺序（稳定分区）
+        self._items = [it for it in items if it.get("favorite")] + \
+                      [it for it in items if not it.get("favorite")]
         self._key_set = {dedupe_key(it) for it in self._items}
         self.endResetModel()
 
-    def clear(self) -> None:
-        self.reset_items([])
+    def clear(self, keep_favorites: bool = True) -> int:
+        """清空历史。``keep_favorites=True`` 时保留已收藏条目。返回移除条数。"""
+        if not keep_favorites:
+            removed = len(self._items)
+            self.reset_items([])
+            return removed
+        kept = [it for it in self._items if it.get("favorite")]
+        removed = len(self._items) - len(kept)
+        if removed <= 0:
+            return 0
+        self.reset_items(kept)
+        return removed
 
     def dedupe(self) -> int:
         """同 key 只保留最新一条（保持时间倒序）。返回移除条数。"""
@@ -288,19 +437,23 @@ class ClipboardHistoryModel(QtCore.QAbstractListModel):
     def update_item_at(self, row: int, item: dict) -> bool:
         """更新指定行内容。新 key 与其它行冲突时删除当前行（去重）。
 
-        返回 True 表示已更新；False 表示因冲突删除了该行。
+        收藏标记由模型持有：编辑载荷即便不带（或带错）``favorite``，也一律沿用
+        该行现有状态，避免"改个文字把收藏弄丢"。返回 True 表示已更新；
+        False 表示因冲突删除了该行。
         """
         if not (0 <= row < len(self._items)):
             return False
+        merged = dict(item)
+        merged["favorite"] = bool(self._items[row].get("favorite"))
         old_key = dedupe_key(self._items[row])
-        new_key = dedupe_key(item)
+        new_key = dedupe_key(merged)
         if new_key != old_key and new_key in self._key_set:
             self.remove_key(old_key)
             return False
         if new_key != old_key:
             self._key_set.discard(old_key)
             self._key_set.add(new_key)
-        self._items[row] = item
+        self._items[row] = merged
         self._emit_row_changed(row)
         return True
 
@@ -349,6 +502,18 @@ class ClipboardHistoryStore(QtCore.QObject):
         self._dirty = False
         self._save_at = 0.0
         self._shutdown_done = False
+        # 历史是否已成功读取并入模型。**未确认为 True 之前一律不写盘**：
+        # 进程在加载事件被处理前退出（快速退出/崩溃/第二实例）时模型还是空的，
+        # 若照写就会把磁盘上完整的历史覆盖成 []。
+        self._history_ready = False
+        self._blocked_write_logged = False
+        # 本进程显式删掉/清掉的去重键：落盘前合并时不再从磁盘把它们捡回来
+        # （只在成功写盘前有效，见 _clear_deleted）。
+        self._deleted_keys: set[tuple] = set()
+        # 本进程最近一次写盘后的文件指纹 + 写下去的内容：指纹一致说明盘上没被别人
+        # 改过，可直接用上次的 payload 参与合并（省掉每次落盘重读整份 JSON）。
+        self._last_write_sig: tuple | None = None
+        self._last_payload: Optional[list[dict]] = None
         self._writer = threading.Thread(
             target=self._writer_loop, name="clipboard-writer", daemon=True)
         self._writer.start()
@@ -367,38 +532,64 @@ class ClipboardHistoryStore(QtCore.QObject):
         if log or value % _LOG_EVERY == 0:
             lprint(f"剪贴板历史统计: {snapshot}")
 
+    # ── 已删除键（落盘合并用，见 merge_items）──
+    def _remember_deleted(self, *keys) -> None:
+        """记下本进程显式删掉的键，合并磁盘时不再捡回来。"""
+        with self._lock:
+            self._deleted_keys.update(k for k in keys if k is not None)
+
+    def _snapshot_deleted(self) -> frozenset:
+        with self._lock:
+            return frozenset(self._deleted_keys)
+
+    def _clear_deleted(self) -> None:
+        with self._lock:
+            self._deleted_keys.clear()
+
     # ── 历史加载（后台线程 + 主线程入模型）──
     def _load_history_async(self) -> None:
         def _work() -> None:
-            items = self._read_history()
-            self._post(_StoreEvent(_LOADED_EVENT_TYPE, items))
+            ok, items = self._read_history()
+            self._post(_StoreEvent(_LOADED_EVENT_TYPE, (ok, items)))
 
         threading.Thread(target=_work, name="clipboard-loader", daemon=True).start()
 
-    def _read_history(self) -> list[dict]:
-        """读取历史文件（纯 IO+JSON，可在后台线程调用）。"""
+    def _read_history(self) -> tuple[bool, list[dict]]:
+        """读取历史文件（纯 IO+JSON，可在后台线程调用）。
+
+        返回 ``(是否可信, 条目)``：文件不存在 = 可信的空历史；**读取/解析失败
+        返回 ``False``**——此时磁盘内容未知，绝不能当成"空历史"回写覆盖。
+        """
         path = history_file()
         if not path.exists():
-            return []
+            return True, []
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, list):
-                return [it for it in data if isinstance(it, dict)]
         except Exception as e:
-            lprint(f"加载剪贴板历史失败: {e}")
-        return []
+            lprint(f"加载剪贴板历史失败（保留磁盘原文件，不覆盖）: {e}")
+            return False, []
+        if not isinstance(data, list):
+            lprint("加载剪贴板历史失败（顶层不是数组，保留磁盘原文件）")
+            return False, []
+        return True, [it for it in data if isinstance(it, dict)]
 
-    def _on_history_loaded(self, items: list) -> None:
-        if not isinstance(items, list):
+    def _on_history_loaded(self, payload) -> None:
+        ok, items = payload if isinstance(payload, tuple) else (False, [])
+        if not ok:
             return
         existing = self.model.items()
-        if existing:
+        merged = bool(existing)
+        if merged:
             # 加载期间可能已有新条目入模型（概率极低），新条目置前
             items = list(existing) + list(items)
         self.model.reset_items(items)
+        self._history_ready = True
         self._bump("loaded", len(items))
         lprint(f"剪贴板历史已加载 {len(items)} 条")
+        if merged:
+            # 合并结果比磁盘新，补一次落盘（此刻已允许写盘）
+            self.request_save()
         self.historyChanged.emit()
 
     # ── 捕获侧入口（捕获线程调用）──
@@ -419,7 +610,7 @@ class ClipboardHistoryStore(QtCore.QObject):
             self._drain_queue()
             return True
         if ev.type() == _LOADED_EVENT_TYPE:
-            self._on_history_loaded(getattr(ev, "payload", []) or [])
+            self._on_history_loaded(getattr(ev, "payload", None))
             return True
         return super().event(ev)
 
@@ -448,21 +639,61 @@ class ClipboardHistoryStore(QtCore.QObject):
 
     # ── 界面侧入口（主线程调用）──
     def remove_item(self, item: dict) -> bool:
-        """删除指定条目，并清理不再被引用的图片文件。"""
+        """删除指定条目，并清理不再被引用的图片文件。
+
+        收藏条目受保护：需先取消收藏才能删除，此处直接拒绝。
+        """
+        if item.get("favorite"):
+            return False
         removed = self.model.remove_key(dedupe_key(item))
         if removed is None:
             return False
+        self._remember_deleted(dedupe_key(item))
         self.cleanup_orphan_images()
         self.request_save()
         self.historyChanged.emit()
         return True
 
+    def set_favorite(self, item: dict, favorite: bool) -> Optional[bool]:
+        """设置条目收藏态。返回设置后的状态；条目不存在时返回 None。"""
+        key = dedupe_key(item)
+        if self.model.row_of_key(key) is None:
+            return None
+        self.model.set_favorite(key, favorite)
+        self.request_save()
+        self.historyChanged.emit()
+        return bool(favorite)
+
+    def toggle_favorite(self, item: dict) -> Optional[bool]:
+        """切换条目收藏态。返回切换后的状态；条目不存在时返回 None。"""
+        return self.set_favorite(item, not bool(item.get("favorite")))
+
     def update_item_at(self, row: int, item: dict) -> bool:
         """更新指定行（编辑保存）。返回 False 表示因冲突删除了该行。"""
+        old_key = None
+        current = self.model.items()
+        if 0 <= row < len(current):
+            old_key = dedupe_key(current[row])
         ok = self.model.update_item_at(row, item)
+        # 改文本会让去重键变化（等价于改名）：旧 key 在磁盘上的那一版必须作废，
+        # 否则下次落盘合并会把它当"别的实例写的新条目"再捡回来。
+        if old_key is not None and dedupe_key(item) != old_key:
+            self._remember_deleted(old_key)
         self.request_save()
         self.historyChanged.emit()
         return ok
+
+    def update_item(self, item: dict, new_item: dict) -> bool:
+        """按去重键定位并更新条目（编辑保存用）。
+
+        编辑对话框从打开到保存之间，历史可能因新复制或收藏置顶而重排，行号会失准；
+        这里保存时按 key 重新定位。收藏标记由模型沿用该行当前状态。
+        返回 False 表示条目已不存在（或新内容与其它条目冲突被合并）。
+        """
+        row = self.model.row_of_key(dedupe_key(item))
+        if row is None:
+            return False
+        return self.update_item_at(row, dict(new_item))
 
     def dedupe(self) -> int:
         """清理重复：同内容只保留最新一条。返回移除条数。"""
@@ -473,15 +704,35 @@ class ClipboardHistoryStore(QtCore.QObject):
             self.historyChanged.emit()
         return removed
 
-    def clear(self) -> None:
-        """清空历史（连同图片缓存文件）。"""
-        self.model.clear()
-        self.clear_images()
+    def clear(self, keep_favorites: bool = True) -> int:
+        """清空历史。``keep_favorites=True``（默认）时保留已收藏条目。
+
+        返回被移除的条目数。图片缓存只按「仍被引用」清理，收藏项的原图不会误删。
+        """
+        before = self.model.items()
+        removed = self.model.clear(keep_favorites=keep_favorites)
+        if removed <= 0:
+            return 0
+        self._remember_deleted(*[
+            dedupe_key(it) for it in before
+            if not (keep_favorites and it.get("favorite"))
+        ])
+        if keep_favorites:
+            self.cleanup_orphan_images()
+        else:
+            self.clear_images()
         self.request_save()
         self.historyChanged.emit()
+        return removed
 
     def cleanup_orphan_images(self) -> None:
-        """删除不再被任何历史条目引用的图片缓存文件（写盘线程执行）。"""
+        """删除不再被任何历史条目引用的图片缓存文件（写盘线程执行）。
+
+        历史尚未加载完成时**不删**：此刻模型是空/不完整的，按它算引用集会把
+        真实历史的图片全当孤儿删掉。
+        """
+        if not self._history_ready:
+            return
         referenced = {
             str(it.get("image_path", ""))
             for it in self.model.items()
@@ -630,13 +881,61 @@ class ClipboardHistoryStore(QtCore.QObject):
         except OSError:
             pass
 
+    def _collect_payload_items(self) -> Optional[list[dict]]:
+        """算出"该写进文件"的条目；返回 None 表示本次放弃写盘（保命）。
+
+        多实例并存时磁盘上可能有本进程没见过（或已被别的实例改过）的条目，
+        直接写内存模型会把它们覆盖掉——所以要按去重键与磁盘内容合并。
+
+        文件指纹与上次写盘一致说明"盘上就是我们上次写的东西"，直接拿上次的
+        payload 当磁盘内容参与合并即可，省掉重读整份 JSON 的 IO。
+        """
+        mem_items = self.model.items()
+        if _file_sig(history_file()) == self._last_write_sig:
+            disk_items = self._last_payload
+            disk_ok = True
+            if disk_items is None:
+                disk_ok, disk_items = self._read_history()
+        else:
+            disk_ok, disk_items = self._read_history()
+        if not disk_ok:
+            if not self._blocked_write_logged:
+                self._blocked_write_logged = True
+                lprint("剪贴板历史读取失败，本次不落盘（避免覆盖磁盘上的完整历史）")
+            return None
+        if not disk_items:
+            return mem_items
+        merged = merge_items(disk_items, mem_items, self._snapshot_deleted())
+        extra = len(merged) - len(mem_items)
+        if extra > 0:
+            self._bump("merged_from_disk", extra)
+            lprint(f"剪贴板历史落盘前合并：并入磁盘上多出的 {extra} 条（多实例并存）")
+        return merged
+
     def _write_history(self) -> None:
-        """把当前模型序列化到历史文件（临时文件 + 原子替换）。"""
+        """把当前模型序列化到历史文件（跨进程锁 + 临时文件原子替换）。
+
+        历史未加载完成前直接跳过：此时模型不代表磁盘内容，写下去就是数据丢失。
+        """
+        if not self._history_ready:
+            if not self._blocked_write_logged:
+                self._blocked_write_logged = True
+                lprint("剪贴板历史未加载完成，暂不落盘（避免覆盖磁盘上的完整历史）")
+            return
         try:
-            payload = json.dumps(
-                self.model.items(), ensure_ascii=False, indent=2
-            ).encode("utf-8")
-            _atomic_write_bytes(history_file(), payload)
+            with _cross_process_lock() as locked:
+                if not locked:
+                    self._bump("lock_misses", log=True)
+                payload_items = self._collect_payload_items()
+                if payload_items is None:
+                    return
+                payload = json.dumps(
+                    payload_items, ensure_ascii=False, indent=2
+                ).encode("utf-8")
+                _atomic_write_bytes(history_file(), payload)
+                self._last_write_sig = _file_sig(history_file())
+                self._last_payload = payload_items
+                self._clear_deleted()
         except Exception as e:
             self._bump("persist_errors", log=True)
             lprint(f"保存剪贴板历史失败: {e}")

@@ -11,6 +11,7 @@ import os
 os.environ["Lugwit_Debug"] = "logging"
 
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -1520,7 +1521,99 @@ def _install_qt_message_filter() -> None:
     QtCore.qInstallMessageHandler(_handler)
 
 
+# #### 单实例守卫：`.soloignore` 旧实例接管 ####
+# 见 Rez-Docs/solo_单实例守卫模式.md §6。wuwo 带 `.soloignore` 启动本包时只观测不杀旧
+# （托盘启动项已是 `wuwor l_notepad_client .soloignore -- l_notepad_client`），把旧实例信息
+# 经 L_SOLO_PEER_* 交进来，由包自己决定接管还是让位。
+#
+# 本包为什么要接管：多个客户端实例各持一份剪贴板历史模型，退出时都往同一份
+# clipboard_history.json 落盘 → 互相覆盖（2026-09-26 实测把历史抹成 []，见
+# clipboard_store 的模块注释与 doc/CHANGELOG.md）。存储侧已加"重读磁盘→按 key 合并"
+# 与跨进程写盘锁兜底，接管则是从源头避免重复 GUI。
+_SOLO_PEER_ENV_KEYS = (
+    "L_SOLO_IGNORE",
+    "L_SOLO_PEER_PID",
+    "L_SOLO_PEER_PIDS",
+    "L_SOLO_PEER_CMDLINE",
+)
+
+# 进程存活探测：STILL_ACTIVE 退出码（Win32 约定）
+_STILL_ACTIVE = 259
+
+
+def _proc_alive(pid: int) -> bool:
+    """进程是否还在跑（纯 ctypes，不依赖 psutil / pywin32）。"""
+    if pid <= 0 or os.name != "nt":
+        return False
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return False
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return code.value == _STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _solo_takeover_if_peer() -> None:
+    """`.soloignore` 下的旧实例接管：清掉旧客户端再继续启动。
+
+    候选 PID 直接采信 wuwo 传来的 `L_SOLO_PEER_*`（守卫已按本包匹配模式筛过），
+    另用 `L_SOLO_PEER_CMDLINE` 复核确实指向本包，避免误杀。
+    清不掉时**不退出**：本包是纯 GUI、无端口冲突，且历史存储已能多实例合并，
+    继续启动比"点了没反应"更合理（会打印告警便于排查）。
+    """
+    raw = os.environ.get("L_SOLO_PEER_PIDS") or os.environ.get("L_SOLO_PEER_PID") or ""
+    peer_pids = sorted({
+        int(tok) for tok in raw.replace(";", ",").split(",") if tok.strip().isdigit()
+    })
+    peer_cmdline = os.environ.get("L_SOLO_PEER_CMDLINE") or ""
+    # 先摘掉这几个变量：重启/自拉起的新进程会继承 os.environ，
+    # 留着会让子进程再跑一次接管、把刚起好的实例当旧实例杀掉。
+    for key in _SOLO_PEER_ENV_KEYS:
+        os.environ.pop(key, None)
+
+    if not peer_pids:
+        lprint("[solo] .soloignore: 未发现旧实例，照常启动")
+        return
+    if peer_cmdline and "l_notepad_client" not in peer_cmdline:
+        lprint(f"[solo] .soloignore: peer 命令行不含本包，放弃接管: {peer_cmdline!r}")
+        return
+
+    # 连同自身与父进程一起排除：taskkill /T 会连带子孙，误杀父链会把本次启动一起带走
+    skip = {os.getpid(), os.getppid()}
+    alive = [pid for pid in peer_pids if pid not in skip and _proc_alive(pid)]
+    if not alive:
+        lprint(f"[solo] .soloignore: peer {peer_pids} 已不在，照常启动")
+        return
+    lprint(f"[solo] .soloignore: 接管旧实例 {alive}")
+    failed: list[int] = []
+    for pid in alive:
+        result = subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True, text=True, errors="replace",
+        )
+        if result.returncode != 0 and _proc_alive(pid):
+            failed.append(pid)
+    if failed:
+        lprint(f"[solo] .soloignore: 旧实例 {failed} 未能结束（权限？），本次仍继续启动")
+        return
+    # 等旧实例真正退出，避免新旧同时开着写同一份历史
+    deadline = time.time() + 3.0
+    while time.time() < deadline and any(_proc_alive(pid) for pid in alive):
+        time.sleep(0.2)
+    lprint("[solo] .soloignore: 旧实例已结束，接管完成")
+
+
 def main(use_frameless: bool = True) -> int:
+    if os.environ.get("L_SOLO_IGNORE") == "1":
+        _solo_takeover_if_peer()
     _install_crash_handlers()
     _install_qt_message_filter()
     _set_windows_appid("Lugwit.l_notepad.pc")

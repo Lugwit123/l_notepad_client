@@ -34,6 +34,12 @@ from . import paths
 from . import server_config
 from .folder_favorites_widget import FolderFavoritesWidget as FolderFavoritesPanel
 from .account_favorites_widget import AccountFavoritesWidget as AccountFavoritesPanel
+from .star_favorite import (
+    STAR_HOTZONE,
+    draw_favorite_star,
+    is_star_hotzone,
+    row_star_state,
+)
 from .settings_widget import SettingsWidget
 from .version_diff_dialog import VersionDiffDialog
 from .file_store import sanitize_title_to_filename
@@ -371,8 +377,8 @@ class _NoteTreeItemDelegate(QtWidgets.QStyledItemDelegate):
     _COLOR_MISSING = QtGui.QColor("#FF6B6B")
     # 左侧填充
     _PADDING_LEFT = 2
-    # 星标可点击热区宽度（从右侧边缘往左）
-    STAR_HOTZONE = 26
+    # 星标可点击热区宽度（从右侧边缘往左；与剪贴板列表共用一份实现）
+    STAR_HOTZONE = STAR_HOTZONE
     # 父级目录高亮叠加色（alpha 0.8）
     _COLOR_PARENT_HIGHLIGHT = QtGui.QColor(77, 130, 220, 24)
     # 标记 item 为“父级高亮”的自定义 role
@@ -391,17 +397,7 @@ class _NoteTreeItemDelegate(QtWidgets.QStyledItemDelegate):
             return False, None
         owner = self._owner
         fav = bool(owner is not None and owner._is_favorite(key))
-        view = option.widget
-        hovered = bool(view is not None and getattr(view, "_fav_hover_key", None) == key)
-        if not fav and not hovered:
-            return fav, None
-        star_over = hovered and bool(getattr(view, "_fav_hover_star", False))
-        # 悬停到热区时反转星标（实心↔空心）作为可点击反馈
-        if star_over:
-            star = "\u2606" if fav else "\u2605"
-        else:
-            star = "\u2605" if fav else "\u2606"
-        return fav, star
+        return row_star_state(option.widget, key, fav)
 
     @staticmethod
     def _favorite_key_for_role(role):
@@ -478,20 +474,13 @@ class _NoteTreeItemDelegate(QtWidgets.QStyledItemDelegate):
             )
             painter.restore()
 
-        # 右侧收藏星标（参考 l_pyside6_uv StarDelegate）
+        # 右侧收藏星标（与剪贴板列表共用绘制实现）
         _fav, star = self._star_state(option, index)
         if star is not None:
-            painter.save()
-            painter.setPen(QtGui.QPen(self._COLOR_STAR))
-            star_font = QtGui.QFont(option.font)
-            star_font.setPointSize(14)
-            painter.setFont(star_font)
-            painter.drawText(
-                option.rect.adjusted(0, 0, -8, 0),
-                QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
-                star,
+            draw_favorite_star(
+                painter, option.rect, star, option.font,
+                color=self._COLOR_STAR.name(),
             )
-            painter.restore()
 
     def sizeHint(self, option, index):
         base = super().sizeHint(option, index)
@@ -1050,7 +1039,9 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self.notes_list = self.findChild(QtWidgets.QListWidget, "notes_list")
         self.notes_tree = self.findChild(QtWidgets.QTreeWidget, "notes_list")
         self.btn_refresh = self.findChild(QtWidgets.QPushButton, "btn_refresh")
-        self.btn_favorite = self.findChild(QtWidgets.QPushButton, "btn_favorite")
+        self.btn_open_clipboard = self.findChild(
+            QtWidgets.QPushButton, "btn_open_clipboard"
+        )
         self.log_view = self.findChild(QtWidgets.QTextEdit, "log_view")
         self.help_view = self.findChild(QtWidgets.QTextEdit, "help_view")
 
@@ -1114,7 +1105,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             ("btn_save", self.btn_save),
             ("btn_delete", self.btn_delete),
             ("btn_refresh", self.btn_refresh),
-            ("btn_favorite", self.btn_favorite),
+            ("btn_open_clipboard", self.btn_open_clipboard),
             ("btn_ai_ask", self.btn_ai_ask),
             ("log_view", self.log_view),
             ("ai_tabs", self.ai_tabs),
@@ -1590,7 +1581,6 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             self._select_first_note_item()
         else:
             self._set_editor(None)
-        self._update_favorite_button_label()
 
     def _on_refresh_button_clicked(self) -> None:
         """底部「刷新」：重扫笔记，并清理硬盘上已删除的外部/IPC 文件条目。"""
@@ -2765,7 +2755,6 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self._set_editor(note)
         self._last_open_note_id = note.id
         self._save_settings()
-        self._update_favorite_button_label()
 
     def _new_note(self) -> None:
         if self._ask_ai_mode:
@@ -3423,6 +3412,30 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "打开硬盘文件", "")
         if not file_path:
             return
+        self._add_and_select_external_file(file_path)
+
+    def _open_file_from_clipboard(self) -> None:
+        """把剪贴板里的路径当文件打开，等价于在「打开硬盘文件」里选中它。"""
+        text = (QtWidgets.QApplication.clipboard().text() or "").strip()
+        raw = ""
+        for line in text.splitlines():
+            line = line.strip().strip('"').strip("'").strip()
+            if line:
+                raw = line
+                break
+        if not raw:
+            self.status.showMessage("剪贴板为空，无法打开文件", 5000)
+            return
+        path = Path(os.path.expandvars(raw)).expanduser()
+        if not path.is_file():
+            self.status.showMessage(f"剪贴板内容不是文件路径：{raw}", 5000)
+            lprint(f"从剪切板打开文件失败（不是文件）: {raw!r}")
+            return
+        if self.state.dirty and not self._confirm_discard():
+            return
+        self._add_and_select_external_file(str(path))
+
+    def _add_and_select_external_file(self, file_path: str) -> None:
         file_path = str(Path(file_path))
         if file_path not in self._external_files:
             self._external_files.insert(0, file_path)
@@ -3543,7 +3556,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self.btn_save.clicked.connect(self._save_note)
         self.btn_delete.clicked.connect(self._delete_note)
         self.btn_refresh.clicked.connect(self._on_refresh_button_clicked)
-        self.btn_favorite.clicked.connect(self._toggle_favorite_current)
+        self.btn_open_clipboard.clicked.connect(self._open_file_from_clipboard)
         self.btn_ai_ask.clicked.connect(self._ask_ai)
         if self._qt_is_valid(getattr(self, "btn_ai_clear", None)):
             self.btn_ai_clear.clicked.connect(self._clear_ai_context)
@@ -3729,7 +3742,6 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self.btn_ai_ask.setEnabled(False)
         self.btn_save.setEnabled(True)
         self.btn_delete.setEnabled(True)
-        self.btn_favorite.setEnabled(True)
         self._auto_set_highlight_mode(path.name)
         self.state.dirty = False
         self._record_loaded_local_file(path)
@@ -3741,7 +3753,6 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self._log_file_path_label.setText(f"日志路径: {path}")
         self._log_file_path_label.setToolTip(str(path))
         self._sync_version_combo_on_open()
-        self._update_favorite_button_label()
 
     # ===== 服务器日志文件浏览（通过 API 获取） =====
 
@@ -4072,7 +4083,6 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self.btn_ai_ask.setEnabled(False)
         self.btn_save.setEnabled(True)
         self.btn_delete.setEnabled(False)
-        self.btn_favorite.setEnabled(False)
         self._auto_set_highlight_mode(file_name)
         self.state.dirty = False
         self._update_title()
@@ -4345,16 +4355,6 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             except Exception as exc:
                 lprint(f"保存顶层窗口状态失败: {exc}")
 
-    def _toggle_favorite_current(self) -> None:
-        if self._ask_ai_mode:
-            lprint("当前处于 AI 模式，忽略置顶/收藏切换")
-            return
-        key = self._current_favorite_key()
-        if key is None:
-            lprint("当前没有可置顶的内容，忽略")
-            return
-        self._toggle_favorite_key(key)
-
     def _toggle_favorite_by_id(self, note_id: int) -> None:
         """切换指定笔记的收藏（收藏项全局置顶）。"""
         try:
@@ -4383,7 +4383,6 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             self._select_external_file(self._current_external_file)
         elif self.state.current_note_id is not None:
             self._select_note_id(int(self.state.current_note_id))
-        self._update_favorite_button_label()
         self.status.showMessage(msg, 2000)
         lprint(f"收藏切换: key={key!r}, before={before}, after={self._favorite_order}")
 
@@ -4461,7 +4460,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         assert self.btn_ai_ask is not None
         assert self.btn_save is not None
         assert self.btn_delete is not None
-        assert self.btn_favorite is not None
+        assert self.btn_open_clipboard is not None
         assert self.btn_new is not None
         assert self.ai_tabs is not None
         self._ask_ai_mode = True
@@ -4536,7 +4535,6 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         self._update_ai_ask_button_state()
         self.btn_save.setEnabled(False)
         self.btn_delete.setEnabled(False)
-        self.btn_favorite.setEnabled(False)
         self.btn_new.setEnabled(True)
         self._set_ai_controls_visible(True)
         self._update_title()
@@ -5170,8 +5168,6 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
             self.btn_save.setEnabled(True)
         if self._qt_is_valid(getattr(self, "btn_delete", None)):
             self.btn_delete.setEnabled(True)
-        if self._qt_is_valid(getattr(self, "btn_favorite", None)):
-            self.btn_favorite.setEnabled(True)
         self._refresh_core_widget_refs()
         self._set_ai_controls_visible(False)
         title_edit_widget = self._get_right_widget("title_edit", "title_edit")
@@ -6135,7 +6131,7 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         if key is None:
             return item, None, False
         rect = tree.visualItemRect(item)
-        star = pos.x() >= rect.right() - _NoteTreeItemDelegate.STAR_HOTZONE
+        star = is_star_hotzone(rect, pos.x())
         return item, key, star
 
     def _update_tree_star_hover(self, tree, pos) -> None:
@@ -6723,12 +6719,6 @@ class MainWindow(TrayAwareMixin, QtWidgets.QWidget):
         if key is None:
             return False
         return key in self._favorite_order
-
-    def _update_favorite_button_label(self) -> None:
-        if self._is_favorite(self._current_favorite_key()):
-            self.btn_favorite.setText("取消※置顶")
-        else:
-            self.btn_favorite.setText("※ 置顶/收藏")
 
     def _load_settings(self) -> None:
         fav_raw = self._settings.value("ui/favorites", "[]")

@@ -161,9 +161,12 @@
                 </widget>
                </item>
                <item>
-                <widget class="QPushButton" name="btn_favorite">
+                <widget class="QPushButton" name="btn_open_clipboard">
+                 <property name="toolTip">
+                  <string>把剪贴板里的路径当文件打开（等价于「打开硬盘文件」选中它）</string>
+                 </property>
                  <property name="text">
-                  <string>※ 置顶/收藏</string>
+                  <string>从剪切板打开文件</string>
                  </property>
                 </widget>
                </item>

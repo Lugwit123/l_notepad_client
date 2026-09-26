@@ -28,6 +28,12 @@ from . import fav_vars
 from . import clipboard_recorder
 from . import clipboard_store
 from .clipboard_store import ClipboardHistoryModel
+from .star_favorite import (
+    draw_favorite_star,
+    is_star_hotzone,
+    row_star_state_by_row,
+    visible_row_rect,
+)
 from pytracemp import lprint
 
 
@@ -71,6 +77,108 @@ def _favorites_read_from_clipboard() -> dict | None:
     ):
         return obj["data"]
     return None
+
+
+#: 注入 Ctrl+V 前等待调用窗口就绪的最长时间（秒）
+_PASTE_READY_TIMEOUT = 1.0
+#: 就绪轮询间隔（毫秒）
+_PASTE_READY_POLL_MS = 30
+
+
+def paste_to_window_when_ready(hwnd: int, send_paste, deadline: float) -> None:
+    """等调用窗口真的拿到前台与键盘焦点后，再执行 ``send_paste``（注入 Ctrl+V）。
+
+    注入按键会被「此刻抓着键盘的窗口」接走：右键菜单/弹窗还没关、抓取没释放时就注入，
+    Ctrl 被抓取方吃掉、V 落到前台程序 → 调用程序输入框里只多出一个裸 ``v`` 而不粘贴。
+    所以不能盲等固定时长，必须轮询到「无 Qt 弹层抓键盘」且「前台就是调用窗口」为止；
+    超过 ``deadline`` 仍不满足就按尽力而为注入一次（只影响极端情况，不再无限等）。
+    """
+    if sys.platform != "win32" or not hwnd:
+        return
+    try:
+        user32 = ctypes.windll.user32
+        if not user32.IsWindow(hwnd):
+            return
+        root = int(user32.GetAncestor(hwnd, 2) or hwnd)  # GA_ROOT
+        fg = int(user32.GetForegroundWindow())
+        grabbed = QtWidgets.QApplication.activePopupWidget() is not None
+        if (grabbed or fg != root) and time.time() < deadline:
+            if fg != root:
+                user32.SetForegroundWindow(hwnd)
+            QtCore.QTimer.singleShot(
+                _PASTE_READY_POLL_MS,
+                lambda: paste_to_window_when_ready(hwnd, send_paste, deadline),
+            )
+            return
+        lprint(
+            f"注入粘贴快捷键: fg={fg} caller_root={root} 弹层抓键盘={grabbed} "
+            f"等待={max(0.0, _PASTE_READY_TIMEOUT - (deadline - time.time())):.2f}s"
+        )
+        send_paste()
+    except Exception as e:
+        lprint(f"等待调用窗口就绪失败: {e}")
+
+
+def populate_clipboard_context_menu(
+    menu: QtWidgets.QMenu,
+    owner: "FolderFavoritesWidget",
+    item: dict,
+    use_item,
+) -> None:
+    """填充剪贴板历史的右键菜单条目（主面板列表与 Win+V 小窗共用同一份）。
+
+    两个入口的条目、顺序、文案完全一致：收藏 / 查看编辑（仅收藏项） /
+    按类型的复制类操作 / 使用此条 / 删除此条 / 清除全部历史。
+    ``use_item`` 只接一个无参回调——「使用此条」= 恢复系统剪贴板 + 粘贴回调用程序，
+    落地的时机由调用方决定（弹窗必须等菜单关闭、键盘抓取释放后再贴，见
+    ``paste_to_window_when_ready``），这里不关心。
+    """
+    fav_action = menu.addAction(
+        " 取消收藏" if item.get("favorite") else " 收藏此条")
+    fav_action.triggered.connect(
+        lambda: owner._toggle_clipboard_favorite(item))
+    menu.addSeparator()
+
+    if item.get("favorite"):
+        view_action = menu.addAction(" 查看/编辑")
+        view_action.triggered.connect(
+            lambda: owner._open_clipboard_item_editor(item))
+
+    kind = item.get("kind", "text")
+    if kind == "image":
+        img_path = item.get("image_path", "")
+        act_copy = menu.addAction(" 复制图片")
+        act_copy.triggered.connect(
+            lambda: owner._copy_image_to_clipboard(img_path))
+        act_save = menu.addAction(" 另存图片为...")
+        act_save.triggered.connect(
+            lambda: owner._save_image_to_file(img_path))
+    elif kind == "file":
+        files = list(item.get("files", []) or [])
+        act_copy = menu.addAction(" 复制文件")
+        act_copy.triggered.connect(
+            lambda: owner._copy_files_to_clipboard(files))
+        act_open = menu.addAction(" 打开所在文件夹")
+        act_open.triggered.connect(
+            lambda: owner._open_files_location(files))
+    else:
+        act_copy = menu.addAction(" 复制文本")
+        act_copy.triggered.connect(
+            lambda: QtWidgets.QApplication.clipboard().setText(
+                str(item.get("text", "") or ""))
+        )
+
+    use_action = menu.addAction(" 使用此条")
+    use_action.triggered.connect(use_item)
+
+    menu.addSeparator()
+    delete_action = menu.addAction(" 删除此条")
+    delete_action.triggered.connect(
+        lambda: owner._delete_clipboard_item(item))
+
+    menu.addSeparator()
+    clear_action = menu.addAction(" 清除全部历史")
+    clear_action.triggered.connect(owner._clear_clipboard_history)
 
 
 class FolderFavorite(TypedDict):
@@ -403,6 +511,8 @@ class ClipboardItemDelegate(QtWidgets.QStyledItemDelegate):
     _FILE_ROW_H = 26       # 文件行高
     _TEXT_ROW_H = 16       # 文本行高
     _THUMB_CACHE_LIMIT = 256
+    _STAR_RESERVE = 24      # 收藏星标占据的右侧宽度（避免文字压到星标）
+    _STAR_RIGHT_MARGIN = 12  # 星标与行右缘的留白（别贴到滚动条上）
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -470,16 +580,30 @@ class ClipboardItemDelegate(QtWidgets.QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         kind = index.data(ClipboardHistoryModel.KindRole) or "text"
+        favorite = bool(index.data(ClipboardHistoryModel.FavoriteRole))
+        _fav, star = row_star_state_by_row(option.widget, index.row(), favorite)
+        # 有星标时右侧让出一点宽度，避免文字压在星标下面
+        right_pad = self._STAR_RESERVE if star is not None else 0
+        # item 矩形可能比可见 viewport 宽（滚动条占位前完成布局）→ 裁到可见范围，
+        # 否则背景/文字/星标的"右缘"都在滚动条底下，右侧留白等于没留
+        clamped = visible_row_rect(option.rect, option.widget)
+        if clamped != option.rect:
+            option = QtWidgets.QStyleOptionViewItem(option)
+            option.rect = clamped
         painter.save()
         try:
             if kind == "image":
-                self._paint_image_row(painter, option, index)
+                self._paint_image_row(painter, option, index, right_pad)
             elif kind == "file":
-                self._paint_file_row(painter, option, index)
+                self._paint_file_row(painter, option, index, right_pad)
             else:
-                self._paint_text_row(painter, option, index)
+                self._paint_text_row(painter, option, index, right_pad)
         finally:
             painter.restore()
+        if star is not None:
+            draw_favorite_star(
+                painter, option.rect, star, option.font,
+                right_margin=self._STAR_RIGHT_MARGIN)
 
     def _draw_background(self, painter, option):
         if option.state & QtWidgets.QStyle.StateFlag.State_Selected:
@@ -489,23 +613,26 @@ class ClipboardItemDelegate(QtWidgets.QStyledItemDelegate):
         else:
             painter.fillRect(option.rect, QtGui.QColor("#1e1e1e"))
 
-    def _draw_elided_text(self, painter, option, text: str, x: int, color: str = "#d4d4d4"):
+    def _draw_elided_text(self, painter, option, text: str, x: int,
+                          color: str = "#d4d4d4", right_pad: int = 0):
         font = option.font
         fm = QtGui.QFontMetrics(font)
         elided = fm.elidedText(
-            text, QtCore.Qt.ElideRight, max(10, option.rect.right() - x - 6))
+            text, QtCore.Qt.ElideRight,
+            max(10, option.rect.right() - x - 6 - right_pad))
         baseline = option.rect.top() + (
             option.rect.height() - fm.height()) // 2 + fm.ascent()
         painter.setPen(QtGui.QColor(color))
         painter.setFont(font)
         painter.drawText(x, baseline, elided)
 
-    def _paint_text_row(self, painter, option, index):
+    def _paint_text_row(self, painter, option, index, right_pad=0):
         self._draw_background(painter, option)
         text = index.data(QtCore.Qt.DisplayRole) or ""
-        self._draw_elided_text(painter, option, text, option.rect.left() + 6)
+        self._draw_elided_text(painter, option, text, option.rect.left() + 6,
+                               right_pad=right_pad)
 
-    def _paint_image_row(self, painter, option, index):
+    def _paint_image_row(self, painter, option, index, right_pad=0):
         self._draw_background(painter, option)
         path = index.data(ClipboardHistoryModel.ImagePathRole) or ""
         thumb = self._get_thumb(path)
@@ -517,9 +644,10 @@ class ClipboardItemDelegate(QtWidgets.QStyledItemDelegate):
             painter.drawPixmap(QtCore.QRect(tx, ty, tw, th), thumb)
         text = index.data(QtCore.Qt.DisplayRole) or ""
         self._draw_elided_text(painter, option, text,
-                               option.rect.left() + self._THUMB_MAX)
+                               option.rect.left() + self._THUMB_MAX,
+                               right_pad=right_pad)
 
-    def _paint_file_row(self, painter, option, index):
+    def _paint_file_row(self, painter, option, index, right_pad=0):
         self._draw_background(painter, option)
         icon = _FILE_ICON_PROVIDER.icon(
             QtWidgets.QFileIconProvider.IconType.File)
@@ -530,7 +658,69 @@ class ClipboardItemDelegate(QtWidgets.QStyledItemDelegate):
         )
         icon.paint(painter, icon_rect)
         text = index.data(QtCore.Qt.DisplayRole) or ""
-        self._draw_elided_text(painter, option, text, option.rect.left() + 22)
+        self._draw_elided_text(painter, option, text, option.rect.left() + 22,
+                               right_pad=right_pad)
+
+
+class ClipboardStarHover(QtCore.QObject):
+    """剪贴板列表右侧星标的悬停/点击控制器（主面板与 Win+V 弹窗共用）。
+
+    - 悬停：把当前行号与「是否落在星标热区」写到 view 上（``_fav_hover_row`` /
+      ``_fav_hover_star``），供 ClipboardItemDelegate 渲染 ☆/★
+    - 左键落在星标热区：切换该条目的收藏态（交 owner 执行），并吞掉该次按下，
+      避免顺带触发选中/双击
+    """
+
+    def __init__(self, view: QtWidgets.QListView, owner, parent=None) -> None:
+        super().__init__(parent or view)
+        self._view = view
+        self._owner = owner
+        vp = view.viewport()
+        vp.setMouseTracking(True)
+        vp.installEventFilter(self)
+
+    def _row_at(self, pos: QtCore.QPoint):
+        """返回 (行号, 该行可见矩形, 条目 dict)；未命中返回 (None, None, None)。
+
+        矩形与 delegate 绘制时用的是同一个裁剪结果，热区才对得上星标。
+        """
+        index = self._view.indexAt(pos)
+        if not index.isValid():
+            return None, None, None
+        item = index.data(ClipboardHistoryModel.ItemRole)
+        rect = visible_row_rect(self._view.visualRect(index), self._view)
+        return index.row(), rect, item
+
+    def _apply_hover(self, row: int, star: bool) -> None:
+        view = self._view
+        if (getattr(view, "_fav_hover_row", -1) == row
+                and getattr(view, "_fav_hover_star", False) == star):
+            return
+        view._fav_hover_row = row
+        view._fav_hover_star = star
+        view.viewport().update()
+
+    def eventFilter(self, obj, event) -> bool:
+        et = event.type()
+        if et == QtCore.QEvent.Type.MouseMove:
+            pos = event.position().toPoint()
+            row, rect, _item = self._row_at(pos)
+            star = bool(row is not None and rect is not None
+                        and is_star_hotzone(rect, pos.x()))
+            self._apply_hover(-1 if row is None else row, star)
+        elif et == QtCore.QEvent.Type.Leave:
+            self._apply_hover(-1, False)
+        elif (et == QtCore.QEvent.Type.MouseButtonPress
+              and event.button() == QtCore.Qt.MouseButton.LeftButton):
+            pos = event.position().toPoint()
+            row, rect, item = self._row_at(pos)
+            if (item is not None and rect is not None
+                    and is_star_hotzone(rect, pos.x())):
+                self._owner._toggle_clipboard_favorite(item)
+                # 收藏态变化会让排序重排，行号随即失准 → 先清悬停，等下次移动重算
+                self._apply_hover(-1, False)
+                return True
+        return super().eventFilter(obj, event)
 
 
 class ImageHoverPreview(QtCore.QObject):
@@ -925,7 +1115,7 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
         self._kind_combo.currentIndexChanged.connect(self._on_kind_changed)
         clear_btn = QtWidgets.QToolButton()
         clear_btn.setText("🗑 清除")
-        clear_btn.setToolTip("清除全部历史")
+        clear_btn.setToolTip("清除全部历史（收藏项保留）")
         clear_btn.clicked.connect(self._clear_all)
         close_btn = QtWidgets.QToolButton()
         close_btn.setText("✕")
@@ -954,6 +1144,8 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
         self._list.setObjectName("popup_list")
         self._list.setModel(self._proxy)
         self._list.setItemDelegate(ClipboardItemDelegate(self))
+        # 右侧星标：悬停显示、点击切换收藏（owner 指向源面板，落到同一个 store）
+        self._star_hover = ClipboardStarHover(self._list, self._source)
         # 图片项悬停预览（锚定在弹窗左侧）；双击打开独立 QDialog 大图预览/编辑
         self._hover_preview = ImageHoverPreview(self._list, anchor_widget=self)
         self._list.setUniformItemSizes(False)
@@ -1119,22 +1311,22 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
         self._proxy.set_kind_filter(self._kind_combo.itemData(index))
         self._update_count()
 
-    # ── 查看/编辑 ──
+    # ── 查看/编辑（仅收藏条目开放）──
     def _open_item_editor(self, index: QtCore.QModelIndex) -> None:
         item = index.data(ClipboardHistoryModel.ItemRole)
-        if not item:
+        if not item or not item.get("favorite"):
             return
-        src = self._proxy.mapToSource(index)
-        row = src.row() if src.isValid() else -1
-        dlg = ClipboardItemEditorDialog(self._source, item, row, parent=None)
-        dlg.exec()
+        # 与主面板共用同一个编辑对话框入口
+        self._source._open_clipboard_item_editor(item)
         self._update_count()
 
     # ── 使用 ──
     def _on_double_click(self, index: QtCore.QModelIndex) -> None:
-        """双击分发：普通双击 → 粘贴到调用程序；Ctrl+双击 → 独立编辑预览窗口。"""
+        """双击分发：Ctrl+双击且为收藏条目 → 独立编辑窗口；否则粘贴到调用程序。"""
         mods = QtWidgets.QApplication.keyboardModifiers()
-        if mods & QtCore.Qt.KeyboardModifier.ControlModifier:
+        item = index.data(ClipboardHistoryModel.ItemRole) or {}
+        if (mods & QtCore.Qt.KeyboardModifier.ControlModifier
+                and item.get("favorite")):
             self._open_item_editor(index)
         else:
             self._use_item(index)
@@ -1166,7 +1358,10 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
             if user32.IsIconic(hwnd):
                 user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             user32.SetForegroundWindow(hwnd)
-            QtCore.QTimer.singleShot(80, self._send_paste_shortcut)
+            # 不再盲等固定 80ms：菜单/弹窗的键盘抓取可能还没释放，那时注入会掉键
+            paste_to_window_when_ready(
+                hwnd, self._send_paste_shortcut, time.time() + _PASTE_READY_TIMEOUT
+            )
         except Exception as e:
             lprint(f"粘贴到调用窗口失败: {e}")
 
@@ -1184,7 +1379,8 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
             lprint(f"发送粘贴快捷键失败: {e}")
 
     def _clear_all(self) -> None:
-        self._source._clear_clipboard_history_now()
+        """清除全部未收藏条目（与主面板同一入口，带确认框）。"""
+        self._source._clear_clipboard_history()
         self._update_count()
 
     # ── 右键菜单 ──
@@ -1198,21 +1394,17 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
         item = self._item_at(position)
         if not item:
             return
+        at = self._list.indexAt(position)
         menu = QtWidgets.QMenu(self)
-        act_view = menu.addAction(" 查看/编辑")
-        act_view.triggered.connect(
-            lambda: self._open_item_editor(self._list.indexAt(position)))
-        act_use = menu.addAction(" 使用此条")
-        act_use.triggered.connect(
-            lambda: self._use_item(self._list.indexAt(position)))
-        act_del = menu.addAction(" 删除此条")
-        act_del.triggered.connect(
-            lambda: self._source._delete_clipboard_item(item))
-        menu.addSeparator()
-        act_clear = menu.addAction(" 清除全部历史")
-        act_clear.triggered.connect(self._clear_all)
+        # 只记下「要用哪一条」，真正粘贴等 exec 返回、菜单的键盘抓取释放之后再做：
+        # 在菜单的嵌套事件循环里贴，注入的 Ctrl+V 会被菜单吃掉（前台只收到裸 v）。
+        pending_use: list = []
+        populate_clipboard_context_menu(
+            menu, self._source, item, lambda: pending_use.append(at))
         menu.exec(self._list.viewport().mapToGlobal(position))
         self._update_count()
+        if pending_use and pending_use[0] is not None and pending_use[0].isValid():
+            self._use_item(pending_use[0])
 
     # ── 无边框窗口拖动（按住顶部标题行区域移动） ──
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -1444,11 +1636,10 @@ class ClipboardItemEditorDialog(QtWidgets.QDialog):
     """
 
     def __init__(self, source: "FolderFavoritesWidget", item: dict,
-                 row: int, parent=None) -> None:
+                 parent=None) -> None:
         super().__init__(parent)
         self._source = source
         self._item = dict(item)
-        self._row = int(row)
         self.setWindowTitle("预览 / 编辑剪贴板历史")
         self.setModal(True)
         self.resize(720, 620)
@@ -1555,7 +1746,7 @@ class ClipboardItemEditorDialog(QtWidgets.QDialog):
     def _save(self) -> None:
         new_item = dict(self._item)
         new_item["text"] = self._collect_text()
-        self._source._store.update_item_at(self._row, new_item)
+        self._source._store.update_item(self._item, new_item)
         self.accept()
 
     def _copy(self) -> None:
@@ -2409,7 +2600,7 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         act_refresh.triggered.connect(self._refresh_clipboard_display)
         act_dedupe = clipboard_menu.addAction(" 清理重复")
         act_dedupe.triggered.connect(self._dedupe_clipboard_history)
-        act_clear = clipboard_menu.addAction(" 清除全部")
+        act_clear = clipboard_menu.addAction(" 清除全部（保留收藏）")
         act_clear.triggered.connect(self._clear_clipboard_history)
         self.clipboard_actions_btn.setMenu(clipboard_menu)
         clipboard_title_row.addWidget(self.clipboard_actions_btn)
@@ -2490,6 +2681,8 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
 
         # 文本/图片/文件混合渲染（图片缩略图、文件图标、紧凑文本行）
         self.clipboard_list.setItemDelegate(ClipboardItemDelegate(self))
+        # 右侧星标：悬停显示、点击切换收藏（与收藏标签页共用 star_favorite 实现）
+        self._clipboard_star_hover = ClipboardStarHover(self.clipboard_list, self)
         if not getattr(self, "_clipboard_hover_preview", None):
             self._clipboard_hover_preview = ImageHoverPreview(self.clipboard_list)
         clipboard_main_layout.addWidget(self.clipboard_list)
@@ -2532,7 +2725,7 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         act_refresh.triggered.connect(self._refresh_clipboard_display)
         act_dedupe = clipboard_menu.addAction(" 清理重复")
         act_dedupe.triggered.connect(self._dedupe_clipboard_history)
-        act_clear = clipboard_menu.addAction(" 清除全部")
+        act_clear = clipboard_menu.addAction(" 清除全部（保留收藏）")
         act_clear.triggered.connect(self._clear_clipboard_history)
         self.clipboard_actions_btn.setMenu(clipboard_menu)
 
@@ -2555,6 +2748,8 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
 
         # 文本/图片/文件混合渲染（图片缩略图、文件图标、紧凑文本行）
         self.clipboard_list.setItemDelegate(ClipboardItemDelegate(self))
+        # 右侧星标：悬停显示、点击切换收藏（与收藏标签页共用 star_favorite 实现）
+        self._clipboard_star_hover = ClipboardStarHover(self.clipboard_list, self)
         if not getattr(self, "_clipboard_hover_preview", None):
             self._clipboard_hover_preview = ImageHoverPreview(self.clipboard_list)
 
@@ -3397,44 +3592,21 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
             return None
         return index.data(ClipboardHistoryModel.ItemRole)
 
+    def _open_clipboard_item_editor(self, item: dict) -> None:
+        """打开条目的「预览 / 编辑」对话框（主面板右键菜单入口；仅收藏条目）。"""
+        if not item or not item.get("favorite"):
+            return
+        ClipboardItemEditorDialog(self, item, parent=None).exec()
+
     def _show_clipboard_context_menu(self, position: QtCore.QPoint) -> None:
-        """显示剪贴板历史右键菜单（按 kind 提供不同操作）"""
+        """显示剪贴板历史右键菜单（与 Win+V 弹窗共用同一套条目）。"""
         item = self._clipboard_item_at(position)
         if not item:
             return
-        kind = item.get("kind", "text")
-        clipboard = QtWidgets.QApplication.clipboard()
-        menu = QtWidgets.QMenu()
-
-        if kind == "text":
-            act = menu.addAction(" 复制文本")
-            act.triggered.connect(
-                lambda: clipboard.setText(str(item.get("text", "") or ""))
-            )
-        elif kind == "image":
-            img_path = item.get("image_path", "")
-            act_copy = menu.addAction(" 复制图片")
-            act_copy.triggered.connect(
-                lambda: self._copy_image_to_clipboard(img_path))
-            act_save = menu.addAction(" 另存图片为...")
-            act_save.triggered.connect(
-                lambda: self._save_image_to_file(img_path))
-        elif kind == "file":
-            files = list(item.get("files", []) or [])
-            act_copy = menu.addAction(" 复制文件")
-            act_copy.triggered.connect(
-                lambda: self._copy_files_to_clipboard(files))
-            act_open = menu.addAction(" 打开所在文件夹")
-            act_open.triggered.connect(
-                lambda: self._open_files_location(files))
-
-        menu.addSeparator()
-        delete_action = menu.addAction(" 删除此条")
-        delete_action.triggered.connect(
-            lambda: self._delete_clipboard_item(item))
-        menu.addSeparator()
-        clear_action = menu.addAction(" 清除全部历史")
-        clear_action.triggered.connect(self._clear_clipboard_history)
+        index = self.clipboard_list.indexAt(position)
+        menu = QtWidgets.QMenu(self)
+        populate_clipboard_context_menu(
+            menu, self, item, lambda: self._use_clipboard_item(index))
         menu.exec(self.clipboard_list.viewport().mapToGlobal(position))
 
     def _copy_image_to_clipboard(self, img_path: str) -> None:
@@ -3566,7 +3738,9 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
             if user32.IsIconic(hwnd):
                 user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             user32.SetForegroundWindow(hwnd)
-            QtCore.QTimer.singleShot(80, self._send_paste_shortcut)
+            paste_to_window_when_ready(
+                hwnd, self._send_paste_shortcut, time.time() + _PASTE_READY_TIMEOUT
+            )
             return True
         except Exception as e:
             lprint(f"粘贴到调用窗口失败: {e}")
@@ -3585,31 +3759,51 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         except Exception as e:
             lprint(f"发送粘贴快捷键失败: {e}")
 
+    def _toggle_clipboard_favorite(self, item: dict) -> None:
+        """切换剪贴板条目的收藏态（星标点击 / 右键菜单共用入口）。"""
+        if not item:
+            return
+        state = self._store.toggle_favorite(item)
+        if state is None:
+            return
+        lprint(f"剪贴板收藏切换: favorite={state}")
+        self._update_clipboard_count_label()
+
     def _delete_clipboard_item(self, item: dict) -> None:
-        """删除单条剪贴板记录（同时清理不再被引用的图片文件）"""
+        """删除单条剪贴板记录（同时清理不再被引用的图片文件）。
+
+        收藏条目受保护：需先取消收藏才能删除。
+        """
+        if item.get("favorite"):
+            QtWidgets.QMessageBox.information(
+                self, "已收藏", "该条目已收藏，请先取消收藏再删除。")
+            return
         if self._store.remove_item(item):
             self._update_clipboard_count_label()
 
     def _clear_clipboard_history_now(self) -> None:
-        """立即清空剪贴板历史（无确认；供弹窗使用）。"""
+        """立即清空剪贴板历史（无确认；供弹窗使用）。已收藏的条目保留。"""
         self._store.clear()
         self._update_clipboard_count_label()
 
     def _clear_clipboard_history(self) -> None:
-        """清除剪贴板历史（连同图片缓存文件一起删除）"""
-        if self.clipboard_model.rowCount() == 0:
+        """清除剪贴板历史（已收藏的条目保留；不再引用的图片缓存一并删除）"""
+        total = self.clipboard_model.rowCount()
+        fav = self.clipboard_model.favorite_count()
+        if total - fav <= 0:
             return
         reply = QtWidgets.QMessageBox.question(
             self,
             "确认清除",
-            f"确定要清除全部 {self.clipboard_model.rowCount()} 条剪贴板历史记录吗？",
+            f"确定要清除 {total - fav} 条剪贴板历史记录吗？"
+            f"\n（已收藏的 {fav} 条会保留）",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
         )
         if reply == QtWidgets.QMessageBox.Yes:
-            self._store.clear()
+            removed = self._store.clear()
             self._update_clipboard_count_label()
-            lprint(" 剪贴板历史已清除")
+            lprint(f" 剪贴板历史已清除 {removed} 条")
 
     def hideEvent(self, event: QtGui.QHideEvent) -> None:
         # 收起面板时请求立刻落盘（写盘在 store 的写盘线程，不阻塞界面）
