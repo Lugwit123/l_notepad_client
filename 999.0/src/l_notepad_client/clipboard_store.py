@@ -317,8 +317,13 @@ class ClipboardHistoryModel(QtCore.QAbstractListModel):
         target = self._group_top_row(bool(item.get("favorite")))
         if row == target:
             return row
+        # Qt 的 destinationChild 按「移动前的行号」解释：同 parent 往下移时落点 = dest - 1，
+        # 且 dest 落在 [row, row + 1] 区间内会被判非法（beginMoveRows 返回 False）。
+        # 取消收藏正是下移（target > row）→ 必须传 target + 1；照传 target 会拿到 False，
+        # 而未成对的 endMoveRows() 会把进程直接打崩（见 l_notepad/crash_20260927.log）。
+        dest = target + 1 if target > row else target
         self.beginMoveRows(QtCore.QModelIndex(), row, row,
-                           QtCore.QModelIndex(), target)
+                           QtCore.QModelIndex(), dest)
         self._items.pop(row)
         self._items.insert(target, item)
         self.endMoveRows()

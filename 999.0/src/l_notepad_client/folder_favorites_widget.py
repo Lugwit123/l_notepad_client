@@ -508,7 +508,7 @@ class ClipboardItemDelegate(QtWidgets.QStyledItemDelegate):
     """
 
     _THUMB_MAX = 56        # 图片行缩略图区域高度（含内边距）
-    _FILE_ROW_H = 26       # 文件行高
+    _FILE_ROW_H = 20       # 文件行高（图标 14px + 上下各 3px）
     _TEXT_ROW_H = 16       # 文本行高
     _THUMB_CACHE_LIMIT = 256
     _STAR_RESERVE = 24      # 收藏星标占据的右侧宽度（避免文字压到星标）
@@ -1156,7 +1156,7 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
         self._list.setBatchSize(100)
         self._list.setEditTriggers(
             QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._list.setSpacing(2)
+        self._list.setSpacing(1)
         self._list.setContextMenuPolicy(
             QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self._list.customContextMenuRequested.connect(self._show_context_menu)
@@ -2632,7 +2632,7 @@ class FolderFavoritesWidget(QtWidgets.QWidget):
         self.clipboard_list.setEditTriggers(
             QtWidgets.QAbstractItemView.NoEditTriggers
         )
-        self.clipboard_list.setSpacing(2)  # 降低 item 间隔
+        self.clipboard_list.setSpacing(1)  # 行间只留 1px 缝，别把行距撑开
         self.clipboard_list.setStyleSheet(
             """
             QListView#clipboard_list {

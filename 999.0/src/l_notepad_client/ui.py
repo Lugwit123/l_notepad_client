@@ -435,7 +435,7 @@ class _NoteTreeItemDelegate(QtWidgets.QStyledItemDelegate):
         # 紧凑行高：根据行数自适应
         line_height = max(14, rect.height() // max(total_lines, 1))
         x = rect.x() + padding_left
-        y = rect.y() + max(2, (rect.height() - line_height * total_lines) // 2)
+        y = rect.y() + max(0, (rect.height() - line_height * total_lines) // 2)
         for i, part in enumerate(parts):
             font = QtGui.QFont(option.font)
             if i == 0:
@@ -489,7 +489,10 @@ class _NoteTreeItemDelegate(QtWidgets.QStyledItemDelegate):
             return QtCore.QSize(base.width(), 20)
         text = index.data(QtCore.Qt.ItemDataRole.DisplayRole) or ""
         lines = text.split("\n") if isinstance(text, str) else [str(text)]
-        return QtCore.QSize(base.width(), max(32, len(lines) * 14 + 4))
+        # 行高按字体实测算：12px 字体 16px/行，单行项（外部/IPC 文件、搜索命中、
+        # 服务器日志）只给 16 + 4px 内边距 = 20px。旧实现一律返回 32px，单行项
+        # 下方白空 12px，就是"行距大"的来源；多行项（文件名 + 日期）逐行累加不变。
+        return QtCore.QSize(base.width(), 20 if len(lines) <= 1 else 16 * len(lines))
 
 
 class _NoteTreeProxyStyle(QtWidgets.QProxyStyle):
