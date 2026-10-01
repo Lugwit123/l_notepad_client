@@ -40,6 +40,30 @@ _PKG_NAME = str(__package__ or "").split(".")[0] or _PKG_DIR.parents[2].name
 _data_root_cache: Path | None = None
 
 
+def _instance_data_root(pkg: str) -> Path | None:
+    """实例数据根（**实例目录优先于公共数据** ✓）。
+
+    顺序：`LUGWIT_DATA_ROOT/<pkg>`（存在就用）> `~/.lugwit/main/<pkg>`（主实例，存在就用）。
+    `main` 实例下两者是同一目录（老路径曾是 junction）；分支实例、以及**在 wuwo 环境外
+    启动**的进程（桌面客户端 / 托盘拉起的进程）也能找对地方 ✓。
+    """
+    cands: list[Path] = []
+    root = (os.environ.get("LUGWIT_DATA_ROOT") or "").strip()
+    if root:
+        try:
+            cands.append(Path(root).expanduser() / pkg)
+        except OSError:
+            pass
+    cands.append(Path.home() / ".lugwit" / "main" / pkg)
+    for c in cands:
+        try:
+            if c.is_dir():
+                return c
+        except OSError:
+            continue
+    return None
+
+
 def _find_config_file() -> Path | None:
     """定位 wuwo 的 config.yaml（优先级：环境变量 > 包目录向上遍历）。"""
     raw = os.environ.get("WUWO_CONFIG_FILE", "")
@@ -69,7 +93,7 @@ def _read_data_dir_template() -> str:
         text = cfg.read_text(encoding="utf-8")
     except Exception:
         return ""
-    m = re.search(r'^\s*data_dir\s*:\s*["\']?([^"\'\n]+)["\']?\s*$', text, re.MULTILINE)
+    m = re.search(r'^\s*l_data_dir\s*:\s*["\']?([^"\'\n]+)["\']?\s*$', text, re.MULTILINE)
     return m.group(1).strip() if m else ""
 
 
@@ -78,6 +102,9 @@ def _resolve_data_root() -> Path:
 
     模板占位符：{user}=用户主目录，{pkg}=包名；解析失败回退默认 ~/.Lugwit/<包名>。
     """
+    inst = _instance_data_root(_PKG_NAME)
+    if inst is not None:
+        return inst
     tmpl = _read_data_dir_template()
     if tmpl:
         try:
