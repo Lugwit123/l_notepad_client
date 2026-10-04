@@ -14,8 +14,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from pytracemp import lprint
 
-# DPAPI 统一走 l_qframelesswindow 的唯一实现（避免多份 DATA_BLOB 抢 crypt32 全局 argtypes）
-from l_qframelesswindow.dpapi import (
+# DPAPI 统一走 lugwit_auth_client 的唯一实现（避免多份 DATA_BLOB 抢 crypt32 全局 argtypes）
+# 历史实现是 l_qframelesswindow.dpapi，已随该包的 `_auth_client/` 内嵌副本一起收敛到客户端包。
+from lugwit_auth_client.dpapi import (
     dpapi_available as _dpapi_available,
     protect as _dpapi_protect,
     unprotect as _dpapi_unprotect,

@@ -41,6 +41,8 @@ requires = [
     "python-3.12.10",
     "pyside6_essentials",
     "l_qframelesswindow",
+    # DPAPI（本地凭据加密落盘）—— 唯一实现在客户端包里（account_favorites_widget 直接用）
+    "lugwit_auth_client",
     "l_qt_wgt_lib",
     "pytracemp",
 ]
