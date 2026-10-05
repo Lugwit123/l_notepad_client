@@ -1020,6 +1020,9 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
     # 弹窗与光标的间距：既要避开鼠标箭头延伸区（约 12~19px），也留出明显距离
     _cursor_gap_placeholder = None
     _cursor_gap = 28
+    # 触发点击（Shift+中键 这类鼠标触发的呼出）的按键全部抬起后，再缓冲这么久
+    # 才允许自动隐藏：给「触发点击被转给调用方窗口后前台/焦点落定」留出时间。
+    _ARM_SETTLE_SEC = 0.15
 
     def __init__(self, source: "FolderFavoritesWidget", parent=None) -> None:
         flags = (
@@ -1037,6 +1040,13 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
         self._watch_timer.timeout.connect(self._poll_outside_watch)
         self._watch_btn_down = False
         self._watch_fg_hwnd = 0
+        # 触发点击的「武装」状态（防 Shift+中键 弹窗闪现）：
+        # _trigger_btn_down = show 那一刻是否有鼠标键按着（触发点击）；
+        # _armed_at = 自动隐藏允许生效的时间点。触发点击的按键全部抬起并缓冲
+        # _ARM_SETTLE_SEC 后才允许自动隐藏 —— 否则触发点击本身（及它引起的
+        # 前台变化/焦点转移）会被当成「点到别处/切走」→ 弹窗刚出现就被 hide。
+        self._trigger_btn_down = False
+        self._armed_at = 0.0
         self._last_use_ts = 0.0  # _use_item 去重时间戳（双击会同时触发 doubleClicked+activated）
         self._source = source
         self._caller_hwnd: int = 0
@@ -1183,16 +1193,34 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
         self._fit_height_to_content()
         if at_cursor:
             self._move_near_cursor(QtGui.QCursor.pos())
+        fg_before_show = self._get_foreground_hwnd()
         self.show()
         # 刻意不 raise_/activateWindow()/setFocus：抢焦点会让调用程序失焦
         # （如正在编辑的 item 因 focusOut 退出编辑模式回预览）。
         # 点击弹窗仍会自然激活，之后由原 focusOut 自动隐藏逻辑接管。
-        self._watch_fg_hwnd = self._get_foreground_hwnd()
+        # 前台基准取「show 之前」的前台窗口：鼠标触发的呼出（Shift+中键）在中键
+        # 按下沿弹出，随后的 WM_MBUTTONDOWN 会转给光标下的调用方窗口并让它重新
+        # 成为前台；若基准取 show 之后、那一刻恰好是弹窗自己，轮询就会把「前台
+        # 回到调用方」误判成「切走」→ 立刻隐藏（闪现）。取 show 之前最稳。
+        self._watch_fg_hwnd = fg_before_show
         # 打开那一刻若已有鼠标键按着，必须记成「本来就按着」：Shift+中键 正是这种情形——
         # 弹窗在中键「按下」沿弹出、手指还按着中键，而弹窗又刻意停在光标旁（避开光标 28px），
         # 于是首次轮询会把这次按下当成新的「点到别处」→ 立刻 hide（表现为闪现）。
         self._watch_btn_down = self._any_button_down()
+        # 触发点击的按键抬起前不武装自动隐藏（含 0.15s 缓冲），见 _auto_hide_armed
+        self._trigger_btn_down = self._watch_btn_down
+        self._armed_at = 0.0
         self._watch_timer.start()
+        try:
+            lprint(
+                f"[clip-popup-dbg] show_popup: caller_hwnd={caller_hwnd} "
+                f"fg_before={fg_before_show:#x} fg_after={self._watch_fg_hwnd:#x} "
+                f"btn_down={self._watch_btn_down} trigger={self._trigger_btn_down} "
+                f"active={self.isActiveWindow()} visible={self.isVisible()} "
+                f"timer={self._watch_timer.isActive()}"
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _any_button_down() -> bool:
@@ -1211,6 +1239,24 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
             )
         except Exception:
             return False
+
+    def _auto_hide_armed(self) -> bool:
+        """自动隐藏是否已「武装」——触发点击彻底落定后才允许自动隐藏。
+
+        鼠标触发的呼出（Shift+中键）在按钮按下沿弹出，此刻手指还按着按钮；
+        该点击被转给调用方窗口后，会引发前台/焦点的短暂变化。若这些变化被
+        「点到别处 / 切走窗口」逻辑捕获，弹窗就会刚出现就被隐藏（闪现）。
+        因此：show 时若已有按钮按着，要等全部按钮抬起、再缓冲 _ARM_SETTLE_SEC，
+        才恢复自动隐藏判断。无按钮按着（如 Win+V）则立即武装，行为不变。
+        """
+        if self._armed_at:
+            return time.time() >= self._armed_at
+        if not self._trigger_btn_down:
+            self._armed_at = time.time()
+            return True
+        if not self._any_button_down():
+            self._armed_at = time.time() + self._ARM_SETTLE_SEC
+        return False
 
     def _move_near_cursor(self, pos: QtCore.QPoint) -> None:
         """在光标旁摆放弹窗并避免遮挡光标。
@@ -1460,6 +1506,12 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
             return
         if sys.platform != "win32":
             return
+        # 触发点击未落定（按键还没全抬 / 缓冲期没过）：不做任何自动隐藏判断。
+        # 此时的前台/焦点变化是「触发点击被转给调用方」引起的，不是用户切走。
+        # 但按钮状态照常更新，避免武装后把这次点击补判成「按下沿」。
+        if not self._auto_hide_armed():
+            self._watch_btn_down = self._any_button_down()
+            return
         try:
             user32 = ctypes.windll.user32
             # 前台窗口已变更且新前台不是本进程（如 Alt+Tab 切走） → 隐藏
@@ -1471,6 +1523,14 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
                 user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
                 if int(pid.value) != int(
                         ctypes.windll.kernel32.GetCurrentProcessId()):
+                    try:
+                        lprint(
+                            f"[clip-popup-dbg] hide#fg_changed: "
+                            f"fg={fg:#x} watch={self._watch_fg_hwnd:#x} "
+                            f"fg_pid={pid.value} ours={ctypes.windll.kernel32.GetCurrentProcessId()}"
+                        )
+                    except Exception:
+                        pass
                     self.hide()
                     return
             # 任一鼠标键按下沿：点击点不在弹窗（含悬停预览层）内 → 隐藏；
@@ -1490,6 +1550,15 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
                     if not inside and pv is not None and pv.isVisible():
                         inside = pv.geometry().contains(pos)
                 if not inside:
+                    try:
+                        lprint(
+                            f"[clip-popup-dbg] hide#click_outside: "
+                            f"btn_down={btn_down} watch_btn_down={self._watch_btn_down} "
+                            f"cursor=({pt.x},{pt.y}) inside={inside} "
+                            f"geo={self.geometry()}"
+                        )
+                    except Exception:
+                        pass
                     self.hide()
                     return
             self._watch_btn_down = btn_down
@@ -1499,21 +1568,43 @@ class ClipboardHistoryPopup(QtWidgets.QFrame):
     # ── 失焦自动隐藏 ──
     def focusOutEvent(self, event: QtGui.QFocusEvent) -> None:
         super().focusOutEvent(event)
+        try:
+            lprint(
+                f"[clip-popup-dbg] focusOutEvent: active={QtWidgets.QApplication.activeWindow()}"
+            )
+        except Exception:
+            pass
         QtCore.QTimer.singleShot(120, self._maybe_hide)
 
     def _maybe_hide(self) -> None:
         try:
+            # 触发点击未落定（见 _auto_hide_armed）：弹窗可能被触发点击短暂激活后
+            # 又因调用方抢回前台而失焦，这条失焦不能当成「用户点别处」→ 跳过。
+            if not self._auto_hide_armed():
+                return
             # 下拉框列表 / 右键菜单等 Qt 弹出部件打开期间不能隐藏：它们会把
             # activeWindow 抢走，否则点开过滤下拉框时弹窗会自己消失
             if QtWidgets.QApplication.activePopupWidget() is not None:
                 return
             if QtWidgets.QApplication.activeWindow() is not self:
+                try:
+                    lprint(
+                        f"[clip-popup-dbg] hide#maybe_hide: "
+                        f"activeWin={QtWidgets.QApplication.activeWindow()} "
+                        f"self={self}"
+                    )
+                except Exception:
+                    pass
                 self.hide()
         except Exception:
             pass
 
     def hideEvent(self, event: QtGui.QHideEvent) -> None:
         self._watch_timer.stop()
+        try:
+            lprint(f"[clip-popup-dbg] hideEvent: visible={self.isVisible()}")
+        except Exception:
+            pass
         # 隐藏弹窗时一并收起悬停预览浮层
         prev = getattr(self, "_hover_preview", None)
         if prev is not None:
